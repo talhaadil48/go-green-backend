@@ -19,7 +19,7 @@ class ClaimFormQueries:
             "checklist_vd", "checklist_dvla", "checklist_badge", "checklist_recovery",
             "checklist_hire", "checklist_ni_no", "checklist_storage", "checklist_plate",
             "checklist_licence", "checklist_logbook",
-            "date_of_claim", "accident_date", "accident_time", "accident_location",
+            "date_of_claim", "accident_date", "accident_time", "accident_location","accident_description",
             "owner_full_name", "owner_email", "owner_telephone", "owner_address",
             "owner_postcode", "owner_dob", "owner_ni_number", "owner_occupation",
             "driver_full_name", "driver_email", "driver_telephone", "driver_address",

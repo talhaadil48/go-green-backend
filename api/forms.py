@@ -425,6 +425,7 @@ async def get_accident_claim(claim_id: str) -> Dict[str, Any]:
         "accident_date": result.get("accident_date", ""),
         "accident_time": result.get("accident_time", ""),
         "accident_location": result.get("accident_location", ""),
+        "accident_description": result.get("accident_description", ""),
         "owner_full_name": result.get("owner_full_name", ""),
         "owner_email": result.get("owner_email", ""),
         "owner_telephone": result.get("owner_telephone", ""),
