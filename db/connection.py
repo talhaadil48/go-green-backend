@@ -24,6 +24,7 @@ class DBConnection:
             try:
                 cls._connection = psycopg2.connect(
                     database_url,
+                    sslmode="require",
                     cursor_factory=DictCursor
                 )
                 print("Database connected.")
