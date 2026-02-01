@@ -1,7 +1,9 @@
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, HTTPException, Request , Depends
 from typing import Dict, Any
 from sql.combinedQueries import Queries
 from db.connection import DBConnection
+from utils.hashing import hash_password
+from utils.user import get_current_user
 router = APIRouter(prefix="/api", tags=["claims"])
 
 @router.post("/accident-claims/{claim_id}")
@@ -762,3 +764,36 @@ async def delete_claim_document(claim_id: str, doc_name: str):
     }
 
 
+
+
+@router.post("/register")
+async def register_user(username: str, password: str, role: str):
+    conn = DBConnection.get_connection()
+    queries = Queries(conn)
+
+    hashed_password = hash_password(password)
+
+    user = queries.create_user(username, hashed_password, role)
+
+    if not user:
+        raise HTTPException(status_code=400, detail="User already exists")
+
+    return {
+        "message": "User created successfully"
+    }
+
+
+
+
+@router.post("/register")
+async def register_user(username: str, password: str, role: str):
+    conn = DBConnection.get_connection()
+    queries = Queries(conn)
+
+    hashed_password = hash_password(password)
+    user = queries.create_user(username, hashed_password, role)
+
+    if not user:
+        raise HTTPException(status_code=400, detail="User already exists")
+
+    return {"message": "User created successfully", "user": user}

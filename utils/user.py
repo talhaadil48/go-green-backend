@@ -1,27 +1,11 @@
-from fastapi import FastAPI, Depends
-from fastapi.middleware.cors import CORSMiddleware
-from api import forms_router, login_router
+from fastapi import Depends, HTTPException, status
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
-from fastapi import HTTPException, status
+from datetime import datetime, timedelta, timezone
 from utils.jwt import verify_token
-
-app = FastAPI(title="My App")
-
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
-# Security scheme for Swagger
 security = HTTPBearer()
 
-# Dependency to get current user from token
 def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(security)):
     token = credentials.credentials
-    print(token)
     payload = verify_token(token)
     if not payload:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid or expired token")
@@ -29,8 +13,3 @@ def get_current_user(credentials: HTTPAuthorizationCredentials = Depends(securit
     if not user_id:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid token payload")
     return user_id
-
-# Include routers and protect with token
-app.include_router(forms_router)
-app.include_router(login_router)  # leave login public
-

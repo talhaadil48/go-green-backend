@@ -442,3 +442,33 @@ class ClaimFormQueries:
             result = cur.fetchone()
             self.conn.commit()
             return bool(result)
+        
+        
+    def create_user(self, username: str, password: str, role: str) -> dict | None:
+        query = """
+            INSERT INTO users (username, password, role)
+            VALUES (%s, %s, %s)
+            RETURNING id, username, role;
+        """
+        try:
+            with self.conn.cursor() as cur:
+                cur.execute(query, (username, password, role))
+                row = cur.fetchone()
+                self.conn.commit()
+                if row:
+                    columns = [desc[0] for desc in cur.description]
+                    return dict(zip(columns, row))
+        except Exception:
+            self.conn.rollback()
+            return None
+        return None
+
+    def get_user_by_username(self, username: str) -> dict | None:
+        query = "SELECT * FROM users WHERE username = %s;"
+        with self.conn.cursor() as cur:
+            cur.execute(query, (username,))
+            row = cur.fetchone()
+            if row:
+                columns = [desc[0] for desc in cur.description]
+                return dict(zip(columns, row))
+        return None
