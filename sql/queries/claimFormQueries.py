@@ -1,5 +1,5 @@
 from datetime import datetime, timezone
-from typing import Optional, Dict, List, Any
+from typing import Optional
 import json
 
 
@@ -7,52 +7,13 @@ class ClaimFormQueries:
     def __init__(self, conn):
         self.conn = conn
 
-    def _execute_and_commit(self, query: str, params: tuple | dict, returning: bool = True) -> dict | list[dict] | None:
-        """
-        Helper: execute query → fetch if returning → commit → rollback on error
-        """
-        try:
-            with self.conn.cursor() as cur:
-                cur.execute(query, params)
-                if returning:
-                    if cur.description:  # has result set
-                        if "RETURNING" in query.upper():
-                            row = cur.fetchone()
-                            if row:
-                                columns = [desc[0] for desc in cur.description]
-                                return dict(zip(columns, row))
-                        else:
-                            rows = cur.fetchall()
-                            if rows:
-                                columns = [desc[0] for desc in cur.description]
-                                return [dict(zip(columns, row)) for row in rows]
-                    return None  # no rows
-                else:
-                    self.conn.commit()
-                    return None
-        except Exception as e:
-            self.conn.rollback()
-            print(f"Database error: {e}\nQuery: {query}\nParams: {params}")
-            raise  # or return None / log — decide based on your app policy
-
-    def _execute_no_return(self, query: str, params: tuple | dict) -> bool:
-        """Helper for INSERT/UPDATE/DELETE without RETURNING"""
-        try:
-            with self.conn.cursor() as cur:
-                cur.execute(query, params)
-                self.conn.commit()
-                return True
-        except Exception as e:
-            self.conn.rollback()
-            print(f"Database error: {e}\nQuery: {query}\nParams: {params}")
-            return False
-
-    # ────────────────────────────────────────────────
-    #  Upsert methods – dynamic columns, safe handling
-    # ────────────────────────────────────────────────
-
     def upsert_accident_claim(self, claim_id: str, data: dict) -> dict | None:
-        updatable = [
+        """
+        Upsert (insert or update) accident claim.
+        Expects a flat dict with field names matching table columns (or subset).
+        Returns the resulting row as dict or None if failed.
+        """
+        updatable_columns = [
             "checklist_vd", "checklist_dvla", "checklist_badge", "checklist_recovery",
             "checklist_hire", "checklist_ni_no", "checklist_storage", "checklist_plate",
             "checklist_licence", "checklist_logbook",
@@ -76,27 +37,42 @@ class ClaimFormQueries:
             "circumstance_drawing", "direction_before_drawing", "direction_after_drawing"
         ]
 
-        fields = [c for c in updatable if c in data]
-        if not fields and claim_id not in data:
+        fields_to_update = [col for col in updatable_columns if col in data]
+
+        if not fields_to_update and claim_id not in data:
             return None
 
-        columns = ["claim_id"] + fields
-        placeholders = ", ".join(f"%({c})s" for c in columns)
-        set_clause = ", ".join(f"{c} = EXCLUDED.{c}" for c in fields)
+        set_clause = ", ".join(f"{col} = EXCLUDED.{col}" for col in fields_to_update)
+        columns = ["claim_id"] + fields_to_update
+        values_placeholders = ", ".join(f"%({col})s" for col in columns)
 
         query = f"""
         INSERT INTO accident_claims ({', '.join(columns)})
-        VALUES ({placeholders})
-        ON CONFLICT (claim_id) DO UPDATE SET
+        VALUES ({values_placeholders})
+        ON CONFLICT (claim_id)
+        DO UPDATE SET
             {set_clause}
         RETURNING *;
         """
 
-        params = {"claim_id": claim_id, **{k: data[k] for k in fields}}
-        return self._execute_and_commit(query, params)
+        params = {"claim_id": claim_id, **{k: data[k] for k in fields_to_update}}
+
+        try:
+            with self.conn.cursor() as cur:
+                cur.execute(query, params)
+                row = cur.fetchone()
+                if row:
+                    self.conn.commit()
+                    columns = [desc[0] for desc in cur.description]
+                    return dict(zip(columns, row))
+                return None
+        except Exception as e:
+            print(f"Error in upsert_accident_claim: {e}")
+            self.conn.rollback()
+            return None
 
     def upsert_pre_inspection_form(self, claim_id: str, data: dict) -> dict | None:
-        updatable = [
+        updatable_columns = [
             "condition_1", "condition_2", "condition_3", "condition_4", "condition_5",
             "condition_6", "condition_7", "condition_8", "condition_9", "condition_10",
             "condition_11", "condition_12", "condition_13", "condition_14", "condition_15",
@@ -110,85 +86,130 @@ class ClaimFormQueries:
             "base_vehicle_image", "annotated_vehicle_image"
         ]
 
-        fields = [c for c in updatable if c in data]
-        if not fields:
+        fields_to_update = [col for col in updatable_columns if col in data]
+
+        if not fields_to_update:
             return None
 
-        columns = ["claim_id"] + fields
-        placeholders = ", ".join(f"%({c})s" for c in columns)
-        set_clause = ", ".join(f"{c} = EXCLUDED.{c}" for c in fields)
+        set_clause = ", ".join(f"{col} = EXCLUDED.{col}" for col in fields_to_update)
+        columns = ["claim_id"] + fields_to_update
+        values_placeholders = ", ".join(f"%({col})s" for col in columns)
 
         query = f"""
         INSERT INTO pre_inspection_forms ({', '.join(columns)})
-        VALUES ({placeholders})
-        ON CONFLICT (claim_id) DO UPDATE SET
+        VALUES ({values_placeholders})
+        ON CONFLICT (claim_id)
+        DO UPDATE SET
             {set_clause}
         RETURNING *;
         """
 
-        params = {"claim_id": claim_id, **{k: data[k] for k in fields}}
-        return self._execute_and_commit(query, params)
+        params = {"claim_id": claim_id, **{k: data[k] for k in fields_to_update}}
+
+        try:
+            with self.conn.cursor() as cur:
+                cur.execute(query, params)
+                row = cur.fetchone()
+                if row:
+                    self.conn.commit()
+                    columns = [desc[0] for desc in cur.description]
+                    return dict(zip(columns, row))
+            return None
+        except Exception as e:
+            print(f"Error in upsert_pre_inspection_form: {e}")
+            self.conn.rollback()
+            return None
 
     def upsert_cancellation_form(self, claim_id: str, data: dict) -> dict | None:
-        updatable = [
+        updatable_columns = [
             "name", "address", "postcode", "email",
             "cancellation_date", "cancellation_signature"
         ]
 
-        fields = [c for c in updatable if c in data]
-        if not fields:
+        fields_to_update = [col for col in updatable_columns if col in data]
+
+        if not fields_to_update:
             return None
 
-        columns = ["claim_id"] + fields
-        placeholders = ", ".join(f"%({c})s" for c in columns)
-        set_clause = ", ".join(f"{c} = EXCLUDED.{c}" for c in fields)
+        set_clause = ", ".join(f"{col} = EXCLUDED.{col}" for col in fields_to_update)
+        columns = ["claim_id"] + fields_to_update
+        values_placeholders = ", ".join(f"%({col})s" for col in columns)
 
         query = f"""
         INSERT INTO cancellation_forms ({', '.join(columns)})
-        VALUES ({placeholders})
-        ON CONFLICT (claim_id) DO UPDATE SET
+        VALUES ({values_placeholders})
+        ON CONFLICT (claim_id)
+        DO UPDATE SET
             {set_clause}
         RETURNING *;
         """
 
-        params = {"claim_id": claim_id, **{k: data[k] for k in fields}}
-        return self._execute_and_commit(query, params)
+        params = {"claim_id": claim_id, **{k: data[k] for k in fields_to_update}}
+
+        try:
+            with self.conn.cursor() as cur:
+                cur.execute(query, params)
+                row = cur.fetchone()
+                if row:
+                    self.conn.commit()
+                    columns = [desc[0] for desc in cur.description]
+                    return dict(zip(columns, row))
+            return None
+        except Exception as e:
+            print(f"Error in upsert_cancellation_form: {e}")
+            self.conn.rollback()
+            return None
 
     def upsert_storage_form(self, claim_id: str, data: dict) -> dict | None:
-        updatable = [
+        updatable_columns = [
             "name", "postcode", "address1", "address2",
             "vehicle_make", "vehicle_model", "registration_number",
             "date_of_recovery", "storage_start_date", "storage_end_date",
             "number_of_days", "charges_per_day", "total_storage_charge",
             "recovery_charge", "subtotal", "vat_amount", "invoice_total",
-            "client_date", "owner_date",
-            "client_signature", "owner_signature"
+            "client_date", "owner_date", "client_signature", "owner_signature"
         ]
 
-        fields = [c for c in updatable if c in data]
-        if not fields:
+        fields_to_update = [col for col in updatable_columns if col in data]
+
+        if not fields_to_update:
+            print("No fields to update in storage form")
             return None
 
-        # Convert empty strings → None (helps numeric/date columns)
+        # Convert empty strings to None (good practice you already had)
         cleaned_data = {k: None if v == "" else v for k, v in data.items()}
 
-        columns = ["claim_id"] + fields
-        placeholders = ", ".join(f"%({c})s" for c in columns)
-        set_clause = ", ".join(f"{c} = EXCLUDED.{c}" for c in fields)
+        set_clause = ", ".join(f"{col} = EXCLUDED.{col}" for col in fields_to_update)
+        columns = ["claim_id"] + fields_to_update
+        values_placeholders = ", ".join(f"%({col})s" for col in columns)
 
         query = f"""
         INSERT INTO storage_forms ({', '.join(columns)})
-        VALUES ({placeholders})
-        ON CONFLICT (claim_id) DO UPDATE SET
+        VALUES ({values_placeholders})
+        ON CONFLICT (claim_id)
+        DO UPDATE SET
             {set_clause}
         RETURNING *;
         """
 
-        params = {"claim_id": claim_id, **{k: cleaned_data[k] for k in fields}}
-        return self._execute_and_commit(query, params)
+        params = {"claim_id": claim_id, **{k: cleaned_data[k] for k in fields_to_update}}
+
+        try:
+            with self.conn.cursor() as cur:
+                cur.execute(query, params)
+                row = cur.fetchone()
+                if row:
+                    self.conn.commit()
+                    columns = [desc[0] for desc in cur.description]
+                    return dict(zip(columns, row))
+            return None
+        except Exception as e:
+            print(f"Error in upsert_storage_form: {e}")
+            self.conn.rollback()
+            return None
 
     def upsert_rental_agreement(self, claim_id: str, data: dict) -> dict | None:
-        updatable = [
+        updatable_columns = [
             "hirer_name", "title", "permanent_address",
             "additional_driver_name", "licence_no",
             "date_issued", "expiry_date", "dob", "date_test_passed", "occupation",
@@ -214,102 +235,93 @@ class ClaimFormQueries:
             "hirer_signature_insurance", "declaration_signature", "liability_signature"
         ]
 
-        fields = [c for c in updatable if c in data]
-        if not fields:
+        fields_to_update = [col for col in updatable_columns if col in data]
+
+        if not fields_to_update:
             return None
 
-        columns = ["claim_id"] + fields
-        placeholders = ", ".join(f"%({c})s" for c in columns)
-        set_clause = ", ".join(f"{c} = EXCLUDED.{c}" for c in fields)
+        set_clause = ", ".join(f"{col} = EXCLUDED.{col}" for col in fields_to_update)
+        columns = ["claim_id"] + fields_to_update
+        values_placeholders = ", ".join(f"%({col})s" for col in columns)
 
         query = f"""
         INSERT INTO rental_agreements ({', '.join(columns)})
-        VALUES ({placeholders})
-        ON CONFLICT (claim_id) DO UPDATE SET
+        VALUES ({values_placeholders})
+        ON CONFLICT (claim_id)
+        DO UPDATE SET
             {set_clause}
         RETURNING *;
         """
 
-        params = {"claim_id": claim_id, **{k: data[k] for k in fields}}
-        return self._execute_and_commit(query, params)
+        params = {"claim_id": claim_id, **{k: data[k] for k in fields_to_update}}
 
-    # ────────────────────────────────────────────────
-    #  Simple getters
-    # ────────────────────────────────────────────────
-
-    def get_accident_claim(self, claim_id: str) -> dict | None:
-        query = "SELECT * FROM accident_claims WHERE claim_id = %s;"
         try:
             with self.conn.cursor() as cur:
-                cur.execute(query, (claim_id,))
+                cur.execute(query, params)
                 row = cur.fetchone()
                 if row:
-                    cols = [d[0] for d in cur.description]
-                    return dict(zip(cols, row))
+                    self.conn.commit()
+                    col_names = [desc[0] for desc in cur.description]
+                    return dict(zip(col_names, row))
+            return None
         except Exception as e:
+            print(f"Error in upsert_rental_agreement: {e}")
             self.conn.rollback()
-            print(f"get_accident_claim error: {e}")
-        return None
-
-    def get_pre_inspection_form(self, claim_id: str) -> dict | None:
-        query = "SELECT * FROM pre_inspection_forms WHERE claim_id = %s;"
-        try:
-            with self.conn.cursor() as cur:
-                cur.execute(query, (claim_id,))
-                row = cur.fetchone()
-                if row:
-                    cols = [d[0] for d in cur.description]
-                    return dict(zip(cols, row))
-        except Exception as e:
-            self.conn.rollback()
-            print(f"get_pre_inspection_form error: {e}")
-        return None
-
-    # ... same pattern for the other get_ methods (cancellation, storage, rental, claim, user) ...
-
-    def get_user_by_username(self, username: str) -> dict | None:
-        query = "SELECT * FROM users WHERE username = %s;"
-        try:
-            with self.conn.cursor() as cur:
-                cur.execute(query, (username,))
-                row = cur.fetchone()
-                if row:
-                    cols = [d[0] for d in cur.description]
-                    return dict(zip(cols, row))
-        except Exception as e:
-            self.conn.rollback()
-            print(f"get_user_by_username error: {e}")
-        return None
-
-    # ────────────────────────────────────────────────
-    #  Other operations
-    # ────────────────────────────────────────────────
+            return None
 
     def insert_claim(
         self,
-        claimant_name: str | None = None,
-        claim_type: str | None = None,
+        claimant_name: str | None,
+        claim_type: str | None,
         claim_id: str | None = None
     ) -> bool:
         query = """
-        INSERT INTO claims (claim_id, claimant_name, claim_type)
-        VALUES (%s, %s, %s)
-        ON CONFLICT (claim_id) DO NOTHING;
+            INSERT INTO claims (claim_id, claimant_name, claim_type)
+            VALUES (%s, %s, %s);
         """
-        return self._execute_no_return(query, (claim_id, claimant_name, claim_type))
+        try:
+            with self.conn.cursor() as cur:
+                cur.execute(query, (claim_id, claimant_name, claim_type))
+                self.conn.commit()
+            return True
+        except Exception as e:
+            print(f"Error in insert_claim: {e}")
+            self.conn.rollback()
+            return False
 
     def delete_claim(self, claim_id: str) -> bool:
-        query = "DELETE FROM claims WHERE claim_id = %s;"
-        return self._execute_no_return(query, (claim_id,))
+        query = """
+            DELETE FROM claims
+            WHERE claim_id = %s;
+        """
+        try:
+            with self.conn.cursor() as cur:
+                cur.execute(query, (claim_id,))
+                if cur.rowcount == 0:
+                    return False
+                self.conn.commit()
+            return True
+        except Exception as e:
+            print(f"Error in delete_claim: {e}")
+            self.conn.rollback()
+            return False
 
-    def upsert_claim_documents(self, claim_id: str, documents: dict) -> bool:
+    def upsert_claim_documents(self, claim_id: str, documents: dict) -> None:
         query = """
         INSERT INTO claim_documents (claim_id, documents)
         VALUES (%s, %s)
-        ON CONFLICT (claim_id) DO UPDATE
+        ON CONFLICT (claim_id)
+        DO UPDATE
         SET documents = claim_documents.documents || EXCLUDED.documents;
         """
-        return self._execute_no_return(query, (claim_id, json.dumps(documents)))
+
+        try:
+            with self.conn.cursor() as cur:
+                cur.execute(query, (claim_id, json.dumps(documents)))
+                self.conn.commit()
+        except Exception as e:
+            print(f"Error in upsert_claim_documents: {e}")
+            self.conn.rollback()
 
     def delete_claim_document(self, claim_id: str, doc_name: str) -> bool:
         query = """
@@ -325,25 +337,118 @@ class ClaimFormQueries:
                 self.conn.commit()
                 return bool(result)
         except Exception as e:
+            print(f"Error in delete_claim_document: {e}")
             self.conn.rollback()
-            print(f"delete_claim_document error: {e}")
             return False
 
     def create_user(self, username: str, password: str, role: str) -> dict | None:
         query = """
-        INSERT INTO users (username, password, role)
-        VALUES (%s, %s, %s)
-        RETURNING id, username, role;
+            INSERT INTO users (username, password, role)
+            VALUES (%s, %s, %s)
+            RETURNING id, username, role;
         """
         try:
             with self.conn.cursor() as cur:
                 cur.execute(query, (username, password, role))
                 row = cur.fetchone()
+                self.conn.commit()
                 if row:
-                    cols = [d[0] for d in cur.description]
-                    self.conn.commit()
-                    return dict(zip(cols, row))
+                    columns = [desc[0] for desc in cur.description]
+                    return dict(zip(columns, row))
+            return None
         except Exception as e:
+            print(f"Error in create_user: {e}")
             self.conn.rollback()
-            print(f"create_user error: {e}")
+            return None
+
+    # ────────────────────────────────────────────────
+    #  Read-only methods — no need for try/except + rollback
+    # ────────────────────────────────────────────────
+
+    def get_accident_claim(self, claim_id: str) -> dict | None:
+        query = "SELECT * FROM accident_claims WHERE claim_id = %s;"
+        with self.conn.cursor() as cur:
+            cur.execute(query, (claim_id,))
+            row = cur.fetchone()
+            if row:
+                columns = [desc[0] for desc in cur.description]
+                return dict(zip(columns, row))
+        return None
+
+    def get_pre_inspection_form(self, claim_id: str) -> dict | None:
+        query = "SELECT * FROM pre_inspection_forms WHERE claim_id = %s;"
+        with self.conn.cursor() as cur:
+            cur.execute(query, (claim_id,))
+            row = cur.fetchone()
+            if row:
+                columns = [desc[0] for desc in cur.description]
+                return dict(zip(columns, row))
+        return None
+
+    def get_cancellation_form(self, claim_id: str) -> dict | None:
+        query = "SELECT * FROM cancellation_forms WHERE claim_id = %s;"
+        with self.conn.cursor() as cur:
+            cur.execute(query, (claim_id,))
+            row = cur.fetchone()
+            if row:
+                columns = [desc[0] for desc in cur.description]
+                return dict(zip(columns, row))
+        return None
+
+    def get_storage_form(self, claim_id: str) -> dict | None:
+        query = "SELECT * FROM storage_forms WHERE claim_id = %s;"
+        with self.conn.cursor() as cur:
+            cur.execute(query, (claim_id,))
+            row = cur.fetchone()
+            if row:
+                columns = [desc[0] for desc in cur.description]
+                return dict(zip(columns, row))
+        return None
+
+    def get_rental_agreement(self, claim_id: str) -> dict | None:
+        query = "SELECT * FROM rental_agreements WHERE claim_id = %s;"
+        with self.conn.cursor() as cur:
+            cur.execute(query, (claim_id,))
+            row = cur.fetchone()
+            if row:
+                columns = [desc[0] for desc in cur.description]
+                return dict(zip(columns, row))
+        return None
+
+    def get_all_claims(self) -> list[dict]:
+        query = "SELECT * FROM claims;"
+        with self.conn.cursor() as cur:
+            cur.execute(query)
+            rows = cur.fetchall()
+            columns = [desc[0] for desc in cur.description]
+            return [dict(zip(columns, row)) for row in rows]
+
+    def get_claim_by_id(self, claim_id: str) -> dict | None:
+        query = "SELECT * FROM claims WHERE claim_id = %s;"
+        with self.conn.cursor() as cur:
+            cur.execute(query, (claim_id,))
+            row = cur.fetchone()
+            if row:
+                columns = [desc[0] for desc in cur.description]
+                return dict(zip(columns, row))
+        return None
+
+    def get_claim_documents(self, claim_id: str) -> dict | None:
+        query = "SELECT * FROM claim_documents WHERE claim_id = %s;"
+        with self.conn.cursor() as cur:
+            cur.execute(query, (claim_id,))
+            row = cur.fetchone()
+            if row:
+                columns = [desc[0] for desc in cur.description]
+                return dict(zip(columns, row))
+        return None
+
+    def get_user_by_username(self, username: str) -> dict | None:
+        query = "SELECT * FROM users WHERE username = %s;"
+        with self.conn.cursor() as cur:
+            cur.execute(query, (username,))
+            row = cur.fetchone()
+            if row:
+                columns = [desc[0] for desc in cur.description]
+                return dict(zip(columns, row))
         return None
