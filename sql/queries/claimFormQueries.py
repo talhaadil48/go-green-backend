@@ -374,15 +374,21 @@ class ClaimFormQueries:
                 return dict(zip(columns, row))
         return None
     
-    def insert_claim(self,claimant_name: str | None, claim_type: str | None) -> bool:
+    def insert_claim(
+        self,
+        claimant_name: str | None,
+        claim_type: str | None,
+        claim_id: str | None = None
+    ) -> bool:
         query = """
-            INSERT INTO claims (claimant_name, claim_type)
-            VALUES (%s, %s);
+            INSERT INTO claims (claim_id, claimant_name, claim_type)
+            VALUES (%s, %s, %s);
         """
         with self.conn.cursor() as cur:
-            cur.execute(query, (claimant_name, claim_type))
+            cur.execute(query, (claim_id, claimant_name, claim_type))
             self.conn.commit()
         return True
+
 
     def get_all_claims(self) -> list[dict]:
         query = "SELECT * FROM claims;"
@@ -391,6 +397,19 @@ class ClaimFormQueries:
             rows = cur.fetchall()
             columns = [desc[0] for desc in cur.description]
             return [dict(zip(columns, row)) for row in rows]
+        
+    def delete_claim(self, claim_id: str) -> bool:
+        query = """
+            DELETE FROM claims
+            WHERE claim_id = %s;
+        """
+        with self.conn.cursor() as cur:
+            cur.execute(query, (claim_id,))
+            if cur.rowcount == 0:
+                return False
+            self.conn.commit()
+        return True
+
 
     def get_claim_by_id(self, claim_id: str) -> dict | None:
         query = "SELECT * FROM claims WHERE claim_id = %s;"

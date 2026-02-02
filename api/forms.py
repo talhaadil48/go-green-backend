@@ -3,6 +3,8 @@ from typing import Dict, Any
 from sql.combinedQueries import Queries
 from db.connection import DBConnection
 from utils.hashing import hash_password
+from psycopg2.errors import UniqueViolation
+
 from utils.user import get_current_user
 router = APIRouter(prefix="/api", tags=["claims"])
 
@@ -666,6 +668,7 @@ async def get_rental_agreement(claim_id: str) -> Dict[str, Any]:
 
 
 
+
 @router.post("/claims")
 async def create_claim(payload: Dict[str, Any]):
     conn = DBConnection.get_connection()
@@ -673,18 +676,43 @@ async def create_claim(payload: Dict[str, Any]):
 
     claimant_name = payload.get("claimant_name")
     claim_type = payload.get("claim_type")
+    claim_id = payload.get("claim_id")  # optional
 
-    
-
-    queries.insert_claim(
-        claimant_name=claimant_name,
-        claim_type=claim_type
-    )
+    try:
+        queries.insert_claim(
+            claimant_name=claimant_name,
+            claim_type=claim_type,
+            claim_id=claim_id
+        )
+    except UniqueViolation:
+        conn.rollback()
+        raise HTTPException(
+            status_code=409,
+            detail="claim_id already exists"
+        )
 
     return {
         "message": "Claim created successfully",
+        "claim_id": claim_id or "auto-generated"
     }
 
+@router.delete("/claims/{claim_id}")
+async def delete_claim(claim_id: str):
+    conn = DBConnection.get_connection()
+    queries = Queries(conn)
+
+    deleted = queries.delete_claim(claim_id)
+
+    if not deleted:
+        raise HTTPException(
+            status_code=404,
+            detail="Claim not found"
+        )
+
+    return {
+        "message": "Claim deleted successfully",
+        "claim_id": claim_id
+    }
 
 
 @router.get("/claims")
