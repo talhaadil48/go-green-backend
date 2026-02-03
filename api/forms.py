@@ -825,3 +825,68 @@ async def register_user(username: str, password: str, role: str):
         raise HTTPException(status_code=400, detail="User already exists")
 
     return {"message": "User created successfully", "user": user}
+
+
+@router.put("/claims/{claim_id}/soft-delete")
+async def soft_delete_claim(claim_id: str):
+    conn = DBConnection.get_connection()
+    queries = Queries(conn)
+
+    deleted = queries.soft_delete_claim(claim_id)
+
+    if not deleted:
+        raise HTTPException(
+            status_code=404,
+            detail="Claim not found"
+        )
+
+    return {
+        "message": "Claim soft deleted successfully",
+        "claim_id": claim_id
+    }
+
+
+@router.put("/claims/{claim_id}/restore")
+async def restore_claim(claim_id: str):
+    conn = DBConnection.get_connection()
+    queries = Queries(conn)
+
+    restored = queries.restore_claim(claim_id)
+
+    if not restored:
+        raise HTTPException(
+            status_code=404,
+            detail="Claim not found"
+        )
+
+    return {
+        "message": "Claim restored successfully",
+        "claim_id": claim_id
+    }
+    
+    
+@router.get("/recently")
+async def recently_deleted_claims():
+    conn = DBConnection.get_connection()
+    queries = Queries(conn)
+
+    claims = queries.get_recently_deleted_claims()
+
+    if not claims:  # optional: just for clarity
+        return {"count": 0, "claims": []}
+
+    return {
+        "count": len(claims),
+        "claims": claims
+    }
+
+
+
+@router.post("/claims/mark-invoice-sent/{claim_id}")
+async def mark_invoice_sent(claim_id: str):
+    conn = DBConnection.get_connection()
+    queries = Queries(conn)
+    updated_claim = queries.mark_invoice_sent(claim_id)
+    if not updated_claim:
+        return {"message": "Claim not found", "claim_id": claim_id}
+    return {"message": "Invoice marked as Sent", "claim": updated_claim}

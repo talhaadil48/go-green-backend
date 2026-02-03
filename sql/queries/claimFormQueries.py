@@ -416,12 +416,17 @@ class ClaimFormQueries:
         return None
 
     def get_all_claims(self) -> list[dict]:
-        query = "SELECT * FROM claims;"
+        query = """
+            SELECT *
+            FROM claims
+            WHERE recently_deleted = FALSE;
+        """
         with self.conn.cursor() as cur:
             cur.execute(query)
             rows = cur.fetchall()
             columns = [desc[0] for desc in cur.description]
             return [dict(zip(columns, row)) for row in rows]
+
 
     def get_claim_by_id(self, claim_id: str) -> dict | None:
         query = "SELECT * FROM claims WHERE claim_id = %s;"
@@ -452,3 +457,80 @@ class ClaimFormQueries:
                 columns = [desc[0] for desc in cur.description]
                 return dict(zip(columns, row))
         return None
+    
+    
+   
+   
+    def soft_delete_claim(self, claim_id: str) -> bool:
+        query = """
+            UPDATE claims
+            SET recently_deleted = TRUE,
+                recently_deleted_date = NOW()
+            WHERE claim_id = %s;
+        """
+        try:
+            with self.conn.cursor() as cur:
+                cur.execute(query, (claim_id,))
+                if cur.rowcount == 0:
+                    return False
+                self.conn.commit()
+            return True
+        except Exception as e:
+            print(f"Error in soft_delete_claim: {e}")
+            self.conn.rollback()
+            return False
+
+    def restore_claim(self, claim_id: str) -> bool:
+        query = """
+            UPDATE claims
+            SET recently_deleted = FALSE,
+                recently_deleted_date = NOW()
+            WHERE claim_id = %s;
+        """
+        try:
+            with self.conn.cursor() as cur:
+                cur.execute(query, (claim_id,))
+                if cur.rowcount == 0:
+                    return False
+                self.conn.commit()
+            return True
+        except Exception as e:
+            print(f"Error in restore_claim: {e}")
+            self.conn.rollback()
+            return False
+        
+        
+    def get_recently_deleted_claims(self) -> list[dict]:
+        query = """
+            SELECT *
+            FROM claims
+            WHERE recently_deleted = TRUE;
+        """
+        try:
+            with self.conn.cursor() as cur:
+                cur.execute(query)
+                rows = cur.fetchall()
+                columns = [desc[0] for desc in cur.description]
+                return [dict(zip(columns, row)) for row in rows]
+        except Exception as e:
+            print(f"Error fetching recently deleted claims: {e}")
+            return []
+
+    def mark_invoice_sent(self, claim_id: int) -> dict:
+        query = """
+            UPDATE claims
+            SET invoice_sent = 'Sent'
+            WHERE claim_id = %s
+            RETURNING *;
+        """
+        try:
+            with self.conn.cursor() as cur:
+                cur.execute(query, (claim_id,))
+                row = cur.fetchone()
+                if not row:
+                    return {}  # claim_id not found
+                columns = [desc[0] for desc in cur.description]
+                return dict(zip(columns, row))
+        except Exception as e:
+            print(f"Error updating invoice_sent: {e}")
+            return {}
