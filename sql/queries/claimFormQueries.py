@@ -212,6 +212,10 @@ class ClaimFormQueries:
         updatable_columns = [
             "hirer_name", "title", "permanent_address",
             "additional_driver_name", "licence_no",
+             "new_date_issued",
+      "new_expiry_date",
+      "new_dob",
+      "new_date_test_passed","new_licence_no"," new_occupation"    
             "date_issued", "expiry_date", "dob", "date_test_passed", "occupation",
             "daily_rate", "policy_excess", "deposit", "refuelling_charge",
             "insurance_company", "policy_no", "insurance_dates",

@@ -4,9 +4,9 @@ from sql.combinedQueries import Queries
 from db.connection import DBConnection
 from utils.hashing import hash_password
 from psycopg2.errors import UniqueViolation
+from utils.jwt_utils import get_current_user
 
-from utils.user import get_current_user
-router = APIRouter(prefix="/api", tags=["claims"])
+router = APIRouter(prefix="/api", tags=["claims"] )
 
 @router.post("/accident-claims/{claim_id}")
 @router.put("/accident-claims/{claim_id}")
@@ -613,6 +613,7 @@ async def get_rental_agreement(claim_id: str) -> Dict[str, Any]:
         "daily_rate": result.get("daily_rate"),
         "policy_excess": result.get("policy_excess"),
         "deposit": result.get("deposit"),
+        
         "refuelling_charge": result.get("refuelling_charge"),
         "insurance_company": result.get("insurance_company", ""),
         "policy_no": result.get("policy_no", ""),
@@ -620,6 +621,12 @@ async def get_rental_agreement(claim_id: str) -> Dict[str, Any]:
         "own_insurance_confirm": result.get("own_insurance_confirm", "No"),
         "insurance_date": result.get("insurance_date", ""),
         "insurance_time": result.get("insurance_time", ""),
+         "new_licence_no": result.get("new_licence_no", ""),
+        "new_date_issued": result.get("new_date_issued", ""),
+        "new_expiry_date": result.get("new_expiry_date", ""),
+        "new_dob": result.get("new_dob", ""),
+        "new_date_test_passed": result.get("new_date_test_passed", ""),
+        "new_occupation": result.get("new_occupation", ""),
         "motoring_offence_3yrs": result.get("motoring_offence_3yrs", ""),
         "disqualified_5yrs": result.get("disqualified_5yrs", ""),
         "accident_3yrs": result.get("accident_3yrs", ""),
