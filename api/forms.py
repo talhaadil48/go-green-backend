@@ -4,7 +4,6 @@ from sql.combinedQueries import Queries
 from db.connection import DBConnection
 from utils.hashing import hash_password
 from psycopg2.errors import UniqueViolation
-from utils.jwt_utils import get_current_user
 
 router = APIRouter(prefix="/api", tags=["claims"] )
 
