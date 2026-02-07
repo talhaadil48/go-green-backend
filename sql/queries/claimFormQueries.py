@@ -70,8 +70,14 @@ class ClaimFormQueries:
             print(f"Error in upsert_accident_claim: {e}")
             self.conn.rollback()
             return None
+        
+    def upsert_pre_inspection_form(
+        self,
+        claim_id: str,
+        data: dict,
+        inspection_id: str = None
+    ) -> dict | None:
 
-    def upsert_pre_inspection_form(self, claim_id: str, data: dict) -> dict | None:
         updatable_columns = [
             "condition_1", "condition_2", "condition_3", "condition_4", "condition_5",
             "condition_6", "condition_7", "condition_8", "condition_9", "condition_10",
@@ -89,37 +95,63 @@ class ClaimFormQueries:
         fields_to_update = [col for col in updatable_columns if col in data]
 
         if not fields_to_update:
-            return None
-
-        set_clause = ", ".join(f"{col} = EXCLUDED.{col}" for col in fields_to_update)
-        columns = ["claim_id"] + fields_to_update
-        values_placeholders = ", ".join(f"%({col})s" for col in columns)
-
-        query = f"""
-        INSERT INTO pre_inspection_forms ({', '.join(columns)})
-        VALUES ({values_placeholders})
-        ON CONFLICT (claim_id)
-        DO UPDATE SET
-            {set_clause}
-        RETURNING *;
-        """
-
-        params = {"claim_id": claim_id, **{k: data[k] for k in fields_to_update}}
+            if inspection_id:
+                return self.get_pre_inspection_form(inspection_id)
+            forms = self.get_pre_inspection_forms_by_claim(claim_id)
+            return forms[0] if forms else None
 
         try:
             with self.conn.cursor() as cur:
+
+                if inspection_id:
+                    columns = ["claim_id", "inspection_id"] + fields_to_update
+                    values_placeholders = ", ".join(f"%({col})s" for col in columns)
+                    set_clause = ", ".join(f"{col} = EXCLUDED.{col}" for col in fields_to_update)
+
+                    query = f"""
+                    INSERT INTO pre_inspection_forms ({', '.join(columns)})
+                    VALUES ({values_placeholders})
+                    ON CONFLICT (inspection_id)
+                    DO UPDATE SET
+                        {set_clause}
+                    RETURNING *;
+                    """
+
+                    params = {
+                        "claim_id": claim_id,
+                        "inspection_id": inspection_id,
+                        **{col: data[col] for col in fields_to_update}
+                    }
+
+                else:
+                    columns = ["claim_id"] + fields_to_update
+                    values_placeholders = ", ".join(f"%({col})s" for col in columns)
+
+                    query = f"""
+                    INSERT INTO pre_inspection_forms ({', '.join(columns)})
+                    VALUES ({values_placeholders})
+                    RETURNING *;
+                    """
+
+                    params = {
+                        "claim_id": claim_id,
+                        **{col: data[col] for col in fields_to_update}
+                    }
+
                 cur.execute(query, params)
                 row = cur.fetchone()
-                if row:
+                if not row:
                     self.conn.commit()
-                    columns = [desc[0] for desc in cur.description]
-                    return dict(zip(columns, row))
-            return None
+                    return None
+
+                columns = [desc[0] for desc in cur.description]
+                self.conn.commit()
+                return dict(zip(columns, row))
+
         except Exception as e:
             print(f"Error in upsert_pre_inspection_form: {e}")
             self.conn.rollback()
             return None
-
     def upsert_cancellation_form(self, claim_id: str, data: dict) -> dict | None:
         updatable_columns = [
             "name", "address", "postcode", "email",
@@ -379,16 +411,32 @@ class ClaimFormQueries:
                 return dict(zip(columns, row))
         return None
 
-    def get_pre_inspection_form(self, claim_id: str) -> dict | None:
-        query = "SELECT * FROM pre_inspection_forms WHERE claim_id = %s;"
+    def get_pre_inspection_form(self, claim_id: str) -> list[dict]:  # Changed to list
+        """
+        Get ALL pre-inspection forms by claim_id (multiple rows)
+        """
+        query = """
+        SELECT * FROM pre_inspection_forms 
+        WHERE claim_id = %s 
+        ORDER BY inspection_id ASC;
+        """
         with self.conn.cursor() as cur:
             cur.execute(query, (claim_id,))
+            rows = cur.fetchall()
+            if rows:
+                columns = [desc[0] for desc in cur.description]
+                return [dict(zip(columns, row)) for row in rows]
+        return []
+
+    def get_pre_inspection_form_by_inspection(self, inspection_id: str) -> dict | None:
+        query = "SELECT * FROM pre_inspection_forms WHERE inspection_id = %s;"
+        with self.conn.cursor() as cur:
+            cur.execute(query, (inspection_id,))
             row = cur.fetchone()
             if row:
                 columns = [desc[0] for desc in cur.description]
                 return dict(zip(columns, row))
         return None
-
     def get_cancellation_form(self, claim_id: str) -> dict | None:
         query = "SELECT * FROM cancellation_forms WHERE claim_id = %s;"
         with self.conn.cursor() as cur:

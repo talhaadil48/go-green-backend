@@ -1,4 +1,4 @@
-from fastapi import APIRouter, HTTPException, Request , Depends
+from fastapi import APIRouter, HTTPException, Request , Depends , Body
 from typing import Dict, Any
 from sql.combinedQueries import Queries
 from db.connection import DBConnection
@@ -9,61 +9,39 @@ from pydantic import BaseModel
 from utils.jwt_handler import decode_token
 from fastapi import status
 
-security = HTTPBearer(
-    scheme_name="Bearer",
-    description="JWT Authorization header using the Bearer scheme"
-)
 
-
-class CurrentUser(BaseModel):
-    id: str
-    username: str
-    role: str
-    permissions: dict = {}
-def get_current_user(
-    credentials: HTTPAuthorizationCredentials = Depends(security)
-) -> CurrentUser:
+router = APIRouter(prefix="/post", tags=["post-claims"])
+@router.post("/accident-claims/{claim_id}")
+@router.put("/accident-claims/{claim_id}")
+async def upsert_accident_claim(
+    claim_id: str,
+    request: Request,
+    # db = Depends(get_db_dependency)   ← replace with your actual db dependency
+) -> Dict[str, Any]:
     """
-    Dependency that:
-    1. Extracts Bearer token
-    2. Validates & decodes it
-    3. Returns structured CurrentUser
+    Create new accident claim or update existing one (partial update).
+    Accepts any subset of fields.
     """
-    token = credentials.credentials
+    try:
+        incoming_data: dict = await request.json()
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid JSON")
 
-    # ← REPLACE with your actual token validation logic
-    payload = decode_token(token)          # your function
+   
+    claim_id = incoming_data.get("claim_id")
+    # Remove claim_id from update data if present (it's already in path)
+    update_data = {k: v for k, v in incoming_data.items() if k != "claim_id"}
 
-    if not payload:
-        raise HTTPException(
-            status_code=status.HTTP_401_UNAUTHORIZED,
-            detail="Invalid or expired token",
-            headers={"WWW-Authenticate": "Bearer"},
-        )
-
-    return CurrentUser(
-        id=payload.get("sub"),
-        username=payload.get("username", ""),
-        role=payload.get("role", "user"),
-        permissions=payload.get("permissions", {}),
-    )
-
-router = APIRouter(
-    prefix="/api",
-    tags=["claims"],
-    dependencies=[Depends(get_current_user)]          # ← ALL routes protected by default
-)
-
-@router.get("/accident-claims/{claim_id}")
-async def get_accident_claim(claim_id: str) -> Dict[str, Any]:
-    conn = DBConnection.get_connection()
+    conn = DBConnection.get_connection()          # ← your connection logic
     queries = Queries(conn)
-    
-    result = queries.get_accident_claim(claim_id)
+ 
+    result = queries.upsert_accident_claim(claim_id, update_data)
+
     if not result:
-        raise HTTPException(status_code=404, detail="Accident claim not found")
-    
-    return {
+        raise HTTPException(status_code=500, detail="Failed to save claim")
+
+    # Format response exactly like your example
+    response = {
         "claim_id": result["claim_id"],
         "checklist_v.d": result.get("checklist_vd"),
         "checklist_dvla": result.get("checklist_dvla"),
@@ -79,7 +57,6 @@ async def get_accident_claim(claim_id: str) -> Dict[str, Any]:
         "accident_date": result.get("accident_date", ""),
         "accident_time": result.get("accident_time", ""),
         "accident_location": result.get("accident_location", ""),
-        "accident_description": result.get("accident_description", ""),
         "owner_full_name": result.get("owner_full_name", ""),
         "owner_email": result.get("owner_email", ""),
         "owner_telephone": result.get("owner_telephone", ""),
@@ -137,59 +114,128 @@ async def get_accident_claim(claim_id: str) -> Dict[str, Any]:
         "direction_after_drawing": result.get("direction_after_drawing"),
     }
 
+    return response
 
-# ────────────────────────────────────────────────
-# 2. Pre-Inspection Form - GET
-# ─────────────────
-@router.get("/pre-inspection-forms/{claim_id}")
-async def get_pre_inspection_form(claim_id: str) -> list[Dict[str, Any]]:
+
+@router.post("/pre-inspection-forms")
+async def upsert_pre_inspection_form(request: Request) -> Dict[str, Any]:
     """
-    Get ALL pre-inspection forms for given claim_id (multiple inspections)
+    Create new pre-inspection form or update existing one.
+    claim_id ALWAYS required. inspection_id optional.
+    If inspection_id given → update that row (404 if not exist)
+    If no inspection_id → create new row
+    Accepts partial updates (only sent fields are updated).
     """
-    conn = DBConnection.get_connection()
-    queries = Queries(conn)
-   
-    results = queries.get_pre_inspection_form(claim_id)  # Changed to list
-   
-    response_list = []
-    for result in results:
-        response = {
-            f"condition_{i}": result.get(f"condition_{i}", "") for i in range(1, 31)
-        }
-        response.update({
-            "date": result.get("date", ""),
-            "customer": result.get("customer", ""),
-            "detailer": result.get("detailer", ""),
-            "order_number": result.get("order_number", ""),
-            "year": result.get("year", ""),
-            "make": result.get("make", ""),
-            "model": result.get("model", ""),
-            "notes": result.get("notes", ""),
-            "recommendations": result.get("recommendations", ""),
-            "customer_signature": result.get("customer_signature"),
-            "detailer_signature": result.get("detailer_signature"),
-            "base_vehicle_image": result.get("base_vehicle_image"),
-            "annotated_vehicle_image": result.get("annotated_vehicle_image"),
-            "claim_id": result["claim_id"],
-            "inspection_id": result["inspection_id"],  # NEW
-        })
-        response_list.append(response)
+    try:
+        incoming_data: dict = await request.json()
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid or missing JSON body")
     
-    return response_list  # Returns [] if none
-
-# ────────────────────────────────────────────────
-# 3. Cancellation Form - GET
-# ────────────────────────────────────────────────
-@router.get("/cancellation-forms/{claim_id}")
-async def get_cancellation_form(claim_id: str) -> Dict[str, Any]:
+    claim_id = incoming_data.get("claim_id")
+    if not claim_id or not isinstance(claim_id, str) or not claim_id.strip():
+        raise HTTPException(
+            status_code=400,
+            detail="claim_id is required and must be a non-empty string in the request body"
+        )
+    
+    inspection_id = incoming_data.get("inspection_id")
+    # Remove claim_id and inspection_id from the fields to update
+    update_data = {k: v for k, v in incoming_data.items() if k not in ("claim_id", "inspection_id")}
+    
     conn = DBConnection.get_connection()
     queries = Queries(conn)
     
-    result = queries.get_cancellation_form(claim_id)
+    if inspection_id:
+        # UPDATE existing by inspection_id + claim_id
+        result = queries.upsert_pre_inspection_form(claim_id, update_data, inspection_id=inspection_id)
+    else:
+        # INSERT new (no inspection_id filter)
+        result = queries.upsert_pre_inspection_form(claim_id, update_data)
+    
     if not result:
-        raise HTTPException(status_code=404, detail="Cancellation form not found")
+        raise HTTPException(status_code=500, detail="Failed to save pre-inspection form")
     
-    return {
+    # Format response exactly matching your example structure + inspection_id
+    response = {
+        "condition_1": result.get("condition_1", ""),
+        "condition_2": result.get("condition_2", ""),
+        "condition_3": result.get("condition_3", ""),
+        "condition_4": result.get("condition_4", ""),
+        "condition_5": result.get("condition_5", ""),
+        "condition_6": result.get("condition_6", ""),
+        "condition_7": result.get("condition_7", ""),
+        "condition_8": result.get("condition_8", ""),
+        "condition_9": result.get("condition_9", ""),
+        "condition_10": result.get("condition_10", ""),
+        "condition_11": result.get("condition_11", ""),
+        "condition_12": result.get("condition_12", ""),
+        "condition_13": result.get("condition_13", ""),
+        "condition_14": result.get("condition_14", ""),
+        "condition_15": result.get("condition_15", ""),
+        "condition_16": result.get("condition_16", ""),
+        "condition_17": result.get("condition_17", ""),
+        "condition_18": result.get("condition_18", ""),
+        "condition_19": result.get("condition_19", ""),
+        "condition_20": result.get("condition_20", ""),
+        "condition_21": result.get("condition_21", ""),
+        "condition_22": result.get("condition_22", ""),
+        "condition_23": result.get("condition_23", ""),
+        "condition_24": result.get("condition_24", ""),
+        "condition_25": result.get("condition_25", ""),
+        "condition_26": result.get("condition_26", ""),
+        "condition_27": result.get("condition_27", ""),
+        "condition_28": result.get("condition_28", ""),
+        "condition_29": result.get("condition_29", ""),
+        "condition_30": result.get("condition_30", ""),
+        "date": result.get("date", ""),
+        "customer": result.get("customer", ""),
+        "detailer": result.get("detailer", ""),
+        "order_number": result.get("order_number", ""),
+        "year": result.get("year", ""),
+        "make": result.get("make", ""),
+        "model": result.get("model", ""),
+        "notes": result.get("notes", ""),
+        "recommendations": result.get("recommendations", ""),
+        "customer_signature": result.get("customer_signature"),
+        "detailer_signature": result.get("detailer_signature"),
+        "base_vehicle_image": result.get("base_vehicle_image"),
+        "annotated_vehicle_image": result.get("annotated_vehicle_image"),
+        "claim_id": result["claim_id"],
+        "inspection_id": result["inspection_id"],  # NEW
+    }
+    return response
+@router.post("/cancellation-forms")
+async def upsert_cancellation_form(request: Request) -> Dict[str, Any]:
+    """
+    Create new cancellation form or update existing one.
+    claim_id MUST be provided in the request body.
+    Accepts partial updates (only sent fields are updated).
+    """
+    try:
+        incoming_data: dict = await request.json()
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid or missing JSON body")
+
+    claim_id = incoming_data.get("claim_id")
+    if not claim_id or not isinstance(claim_id, str) or not claim_id.strip():
+        raise HTTPException(
+            status_code=400,
+            detail="claim_id is required and must be a non-empty string in the request body"
+        )
+
+    # Remove claim_id from update fields
+    update_data = {k: v for k, v in incoming_data.items() if k != "claim_id"}
+
+    conn = DBConnection.get_connection()
+    queries = Queries(conn)
+
+    result = queries.upsert_cancellation_form(claim_id, update_data)
+
+    if not result:
+        raise HTTPException(status_code=500, detail="Failed to save cancellation form")
+
+    # Format response to match your typical pattern
+    response = {
         "name": result.get("name", ""),
         "address": result.get("address", ""),
         "postcode": result.get("postcode", ""),
@@ -199,20 +245,43 @@ async def get_cancellation_form(claim_id: str) -> Dict[str, Any]:
         "claim_id": result["claim_id"]
     }
 
+    return response
 
-# ────────────────────────────────────────────────
-# 4. Storage Form - GET
-# ────────────────────────────────────────────────
-@router.get("/storage-forms/{claim_id}")
-async def get_storage_form(claim_id: str) -> Dict[str, Any]:
+
+
+@router.post("/storage-forms")
+async def upsert_storage_form(request: Request) -> Dict[str, Any]:
+    """
+    Create new storage form / storage invoice or update existing one.
+    claim_id MUST be provided in the request body.
+    Accepts partial updates (only sent fields are updated).
+    """
+    try:
+        incoming_data: dict = await request.json()
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid or missing JSON body")
+    
+
+    claim_id = incoming_data.get("claim_id")
+    if not claim_id or not isinstance(claim_id, str) or not claim_id.strip():
+        raise HTTPException(
+            status_code=400,
+            detail="claim_id is required and must be a non-empty string in the request body"
+        )
+
+    # Remove claim_id from the update payload
+    update_data = {k: v for k, v in incoming_data.items() if k != "claim_id"}
+
     conn = DBConnection.get_connection()
     queries = Queries(conn)
-    
-    result = queries.get_storage_form(claim_id)
+
+    result = queries.upsert_storage_form(claim_id, update_data)
+
     if not result:
-        raise HTTPException(status_code=404, detail="Storage form not found")
-    
-    return {
+        raise HTTPException(status_code=500, detail="Failed to save storage form")
+
+    # Response format matching your example structure
+    response = {
         "name": result.get("name", ""),
         "postcode": result.get("postcode", ""),
         "address1": result.get("address1", ""),
@@ -237,19 +306,40 @@ async def get_storage_form(claim_id: str) -> Dict[str, Any]:
         "claim_id": result["claim_id"]
     }
 
+    return response
 
-# ────────────────────────────────────────────────
-# 5. Rental Agreement - GET
-# ────────────────────────────────────────────────
-@router.get("/rental-agreements/{claim_id}")
-async def get_rental_agreement(claim_id: str) -> Dict[str, Any]:
+@router.post("/rental-agreements")
+async def upsert_rental_agreement(request: Request) -> Dict[str, Any]:
+    """
+    Create or update rental agreement.
+    - claim_id is REQUIRED in the request body
+    - Uses upsert logic based on claim_id (UNIQUE constraint)
+    - Supports partial updates
+    """
+    try:
+        incoming_data: dict = await request.json()
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid or missing JSON body")
+
+    claim_id = incoming_data.get("claim_id")
+    if not claim_id or not isinstance(claim_id, str) or not claim_id.strip():
+        raise HTTPException(
+            status_code=400,
+            detail="claim_id is required and must be a non-empty string in the request body"
+        )
+
+    # Remove claim_id from the fields we're updating
+    update_data = {k: v for k, v in incoming_data.items() if k != "claim_id"}
+
     conn = DBConnection.get_connection()
     queries = Queries(conn)
-    
-    result = queries.get_rental_agreement(claim_id)
+
+    result = queries.upsert_rental_agreement(claim_id, update_data)
+
     if not result:
-        raise HTTPException(status_code=404, detail="Rental agreement not found")
-    
+        raise HTTPException(status_code=500, detail="Failed to save rental agreement")
+
+    # Format response – same style as your example
     response = {
         "rental_agreement_id": result["rental_agreement_id"],
         "claim_id": result["claim_id"],
@@ -266,7 +356,6 @@ async def get_rental_agreement(claim_id: str) -> Dict[str, Any]:
         "daily_rate": result.get("daily_rate"),
         "policy_excess": result.get("policy_excess"),
         "deposit": result.get("deposit"),
-        
         "refuelling_charge": result.get("refuelling_charge"),
         "insurance_company": result.get("insurance_company", ""),
         "policy_no": result.get("policy_no", ""),
@@ -274,12 +363,6 @@ async def get_rental_agreement(claim_id: str) -> Dict[str, Any]:
         "own_insurance_confirm": result.get("own_insurance_confirm", "No"),
         "insurance_date": result.get("insurance_date", ""),
         "insurance_time": result.get("insurance_time", ""),
-         "new_licence_no": result.get("new_licence_no", ""),
-        "new_date_issued": result.get("new_date_issued", ""),
-        "new_expiry_date": result.get("new_expiry_date", ""),
-        "new_dob": result.get("new_dob", ""),
-        "new_date_test_passed": result.get("new_date_test_passed", ""),
-        "new_occupation": result.get("new_occupation", ""),
         "motoring_offence_3yrs": result.get("motoring_offence_3yrs", ""),
         "disqualified_5yrs": result.get("disqualified_5yrs", ""),
         "accident_3yrs": result.get("accident_3yrs", ""),
@@ -324,76 +407,32 @@ async def get_rental_agreement(claim_id: str) -> Dict[str, Any]:
         "declaration_signature": result.get("declaration_signature"),
         "liability_signature": result.get("liability_signature"),
     }
+
     return response
 
 
 
 
-@router.post("/claims")
-async def create_claim(payload: Dict[str, Any]):
+@router.put("/claim-documents/{claim_id}")
+async def upsert_claim_documents(
+    claim_id: str,
+    payload: Dict[str, Any]
+):
+    documents = payload.get("documents")
+
+    if not isinstance(documents, dict):
+        raise HTTPException(status_code=400, detail="documents must be a JSON object")
+
     conn = DBConnection.get_connection()
     queries = Queries(conn)
 
-    claimant_name = payload.get("claimant_name")
-    claim_type = payload.get("claim_type")
-    claim_id = payload.get("claim_id")  # optional
-
-    try:
-        queries.insert_claim(
-            claimant_name=claimant_name,
-            claim_type=claim_type,
-            claim_id=claim_id
-        )
-    except UniqueViolation:
-        conn.rollback()
-        raise HTTPException(
-            status_code=409,
-            detail="claim_id already exists"
-        )
+    queries.upsert_claim_documents(claim_id, documents)
 
     return {
-        "message": "Claim created successfully",
-        "claim_id": claim_id or "auto-generated"
+        "message": "Documents saved successfully",
+        "claim_id": claim_id,
+        "documents": documents
     }
-
-@router.delete("/claims/{claim_id}")
-async def delete_claim(claim_id: str):
-    conn = DBConnection.get_connection()
-    queries = Queries(conn)
-
-    deleted = queries.delete_claim(claim_id)
-
-    if not deleted:
-        raise HTTPException(
-            status_code=404,
-            detail="Claim not found"
-        )
-
-    return {
-        "message": "Claim deleted successfully",
-        "claim_id": claim_id
-    }
-
-
-@router.get("/claims")
-async def get_all_claims() -> list[Dict[str, Any]]:
-    conn = DBConnection.get_connection()
-    queries = Queries(conn)
-
-    return queries.get_all_claims()
-
-
-@router.get("/claims/{claim_id}")
-async def get_claim(claim_id: str) -> Dict[str, Any]:
-    conn = DBConnection.get_connection()
-    queries = Queries(conn)
-
-    result = queries.get_claim_by_id(claim_id)
-    if not result:
-        raise HTTPException(status_code=404, detail="Claim not found")
-
-    return result
-
 
 
 
@@ -413,156 +452,3 @@ async def get_claim_documents(claim_id: str):
         "documents": result.get("documents", {})
     }
 
-
-@router.delete("/claim-documents/{claim_id}/{doc_name}")
-async def delete_claim_document(claim_id: str, doc_name: str):
-    conn = DBConnection.get_connection()
-    queries = Queries(conn)
-
-    success = queries.delete_claim_document(claim_id, doc_name)
-
-    if not success:
-        raise HTTPException(status_code=404, detail="Document not found for this claim")
-
-    return {
-        "message": f"Document '{doc_name}' deleted successfully",
-        "claim_id": claim_id
-    }
-
-
-
-
-@router.post("/register")
-async def register_user(username: str, password: str, role: str):
-    conn = DBConnection.get_connection()
-    queries = Queries(conn)
-
-    hashed_password = hash_password(password)
-
-    user = queries.create_user(username, hashed_password, role)
-
-    if not user:
-        raise HTTPException(status_code=400, detail="User already exists")
-
-    return {
-        "message": "User created successfully"
-    }
-
-
-
-
-@router.post("/register")
-async def register_user(username: str, password: str, role: str):
-    conn = DBConnection.get_connection()
-    queries = Queries(conn)
-
-    hashed_password = hash_password(password)
-    user = queries.create_user(username, hashed_password, role)
-
-    if not user:
-        raise HTTPException(status_code=400, detail="User already exists")
-
-    return {"message": "User created successfully", "user": user}
-
-
-@router.put("/claims/{claim_id}/soft-delete")
-async def soft_delete_claim(claim_id: str):
-    conn = DBConnection.get_connection()
-    queries = Queries(conn)
-
-    deleted = queries.soft_delete_claim(claim_id)
-
-    if not deleted:
-        raise HTTPException(
-            status_code=404,
-            detail="Claim not found"
-        )
-
-    return {
-        "message": "Claim soft deleted successfully",
-        "claim_id": claim_id
-    }
-
-
-@router.put("/claims/{claim_id}/restore")
-async def restore_claim(claim_id: str):
-    conn = DBConnection.get_connection()
-    queries = Queries(conn)
-
-    restored = queries.restore_claim(claim_id)
-
-    if not restored:
-        raise HTTPException(
-            status_code=404,
-            detail="Claim not found"
-        )
-
-    return {
-        "message": "Claim restored successfully",
-        "claim_id": claim_id
-    }
-    
-    
-@router.get("/recently")
-async def recently_deleted_claims():
-    conn = DBConnection.get_connection()
-    queries = Queries(conn)
-
-    claims = queries.get_recently_deleted_claims()
-
-    if not claims:  # optional: just for clarity
-        return {"count": 0, "claims": []}
-
-    return {
-        "count": len(claims),
-        "claims": claims
-    }
-
-
-
-@router.post("/claims/mark-invoice-sent/{claim_id}")
-async def mark_invoice_sent(claim_id: str):
-    conn = DBConnection.get_connection()
-    queries = Queries(conn)
-    updated_claim = queries.mark_invoice_sent(claim_id)
-    if not updated_claim:
-        return {"message": "Claim not found", "claim_id": claim_id}
-    return {"message": "Invoice marked as Sent", "claim": updated_claim}
-
-
-@router.get("/pre-inspection-forms/inspection/{inspection_id}")
-async def get_pre_inspection_form_by_inspection_id(
-    inspection_id: str
-) -> Dict[str, Any]:
-    conn = DBConnection.get_connection()
-    queries = Queries(conn)
-
-    result = queries.get_pre_inspection_form_by_inspection(inspection_id)
-
-    if not result:
-        raise HTTPException(
-            status_code=404,
-            detail="Pre-inspection form not found for this inspection_id"
-        )
-
-    response = {f"condition_{i}": result.get(f"condition_{i}", "") for i in range(1, 31)}
-
-    response.update({
-        "date": result.get("date", ""),
-        "customer": result.get("customer", ""),
-        "detailer": result.get("detailer", ""),
-        "order_number": result.get("order_number", ""),
-        "year": result.get("year", ""),
-        "make": result.get("make", ""),
-        "model": result.get("model", ""),
-        "notes": result.get("notes", ""),
-        "recommendations": result.get("recommendations", ""),
-        "customer_signature": result.get("customer_signature"),
-        "detailer_signature": result.get("detailer_signature"),
-        "base_vehicle_image": result.get("base_vehicle_image"),
-        "annotated_vehicle_image": result.get("annotated_vehicle_image"),
-        "claim_id": result.get("claim_id"),
-        "inspection_id": result.get("inspection_id"),
-    })
-
-    return response
