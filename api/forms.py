@@ -71,6 +71,7 @@ async def get_accident_claim(claim_id: str) -> Dict[str, Any]:
     return {
         "claim_id": result["claim_id"],
         "checklist_v.d": result.get("checklist_vd"),
+        "checklist_pi": result.get("checklist_pi"),
         "checklist_dvla": result.get("checklist_dvla"),
         "checklist_badge": result.get("checklist_badge"),
         "checklist_recovery": result.get("checklist_recovery"),
@@ -340,13 +341,21 @@ async def create_claim(payload: Dict[str, Any]):
     queries = Queries(conn)
 
     claimant_name = payload.get("claimant_name")
-    claim_type = payload.get("claim_type")
-    claim_id = payload.get("claim_id")  # optional
+    claim_type    = payload.get("claim_type")
+    council       = payload.get("council")          # ← new required field
+    claim_id      = payload.get("claim_id")         # optional
+
+    if not all([claimant_name, claim_type, council]):
+        raise HTTPException(
+            status_code=400,
+            detail="claimant_name, claim_type and council are required"
+        )
 
     try:
         queries.insert_claim(
             claimant_name=claimant_name,
             claim_type=claim_type,
+            council=council,                        # ← added
             claim_id=claim_id
         )
     except UniqueViolation:
@@ -355,12 +364,14 @@ async def create_claim(payload: Dict[str, Any]):
             status_code=409,
             detail="claim_id already exists"
         )
+    except Exception as e:
+        conn.rollback()
+        raise HTTPException(status_code=500, detail=str(e))
 
     return {
         "message": "Claim created successfully",
         "claim_id": claim_id or "auto-generated"
     }
-
 @router.delete("/claims/{claim_id}")
 async def delete_claim(claim_id: str):
     conn = DBConnection.get_connection()

@@ -14,7 +14,7 @@ class ClaimFormQueries:
         Returns the resulting row as dict or None if failed.
         """
         updatable_columns = [
-            "checklist_vd", "checklist_dvla", "checklist_badge", "checklist_recovery",
+            "checklist_vd", "checklist_pi", "checklist_dvla", "checklist_badge", "checklist_recovery",
             "checklist_hire", "checklist_ni_no", "checklist_storage", "checklist_plate",
             "checklist_licence", "checklist_logbook",
             "date_of_claim", "accident_date", "accident_time", "accident_location", "accident_description",
@@ -309,22 +309,22 @@ class ClaimFormQueries:
         self,
         claimant_name: str | None,
         claim_type: str | None,
+        council: str | None,               # ← new parameter
         claim_id: str | None = None
-    ) -> bool:
+        ) -> bool:
         query = """
-            INSERT INTO claims (claim_id, claimant_name, claim_type)
-            VALUES (%s, %s, %s);
+            INSERT INTO claims (claim_id, claimant_name, claim_type, council)
+            VALUES (%s, %s, %s, %s);
         """
         try:
             with self.conn.cursor() as cur:
-                cur.execute(query, (claim_id, claimant_name, claim_type))
+                cur.execute(query, (claim_id, claimant_name, claim_type, council))
                 self.conn.commit()
             return True
         except Exception as e:
             print(f"Error in insert_claim: {e}")
             self.conn.rollback()
             return False
-
     def delete_claim(self, claim_id: str) -> bool:
         query = """
             DELETE FROM claims
