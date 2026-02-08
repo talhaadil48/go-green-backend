@@ -454,7 +454,7 @@ async def get_claim_documents(claim_id: str):
 
 
 
-@router.delete("/recently")
+@router.get("/recently")
 async def delete_recently_deleted_claims():
     conn = DBConnection.get_connection()
     queries = Queries(conn)
