@@ -15,6 +15,11 @@ security = HTTPBearer(
 )
 
 
+
+class RegisterUserRequest(BaseModel):
+    username: str
+    password: str
+    role: str
 class CurrentUser(BaseModel):
     id: str
     username: str
@@ -429,27 +434,64 @@ async def delete_claim_document(claim_id: str, doc_name: str):
         "claim_id": claim_id
     }
 
-
-
-
 @router.post("/register")
-async def register_user(username: str, password: str, role: str):
+async def register_user(
+    data: RegisterUserRequest,
+    current_user: CurrentUser = Depends(get_current_user),
+):
+    if current_user.role != "admin":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Admin privileges required",
+        )
+
     conn = DBConnection.get_connection()
     queries = Queries(conn)
 
-    hashed_password = hash_password(password)
+    hashed_password = hash_password(data.password)
 
-    user = queries.create_user(username, hashed_password, role)
+    user = queries.create_user(
+        data.username,
+        hashed_password,
+        data.role
+    )
 
     if not user:
-        raise HTTPException(status_code=400, detail="User already exists")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="User already exists",
+        )
+
+    return {"message": "User created successfully"}
+
+
+    
+@router.delete("/users/{user_id}")
+async def delete_user(
+    user_id: int,
+    current_user: CurrentUser = Depends(get_current_user),
+):
+    if current_user.role != "admin":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Admin privileges required",
+        )
+
+    conn = DBConnection.get_connection()
+    queries = Queries(conn)
+
+    deleted = queries.delete_user(user_id)
+
+    if not deleted:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="User not found",
+        )
 
     return {
-        "message": "User created successfully"
+        "message": "User deleted successfully"
     }
-
-
-
+    
 @router.put("/claims/{claim_id}/soft-delete")
 async def soft_delete_claim(claim_id: str):
     conn = DBConnection.get_connection()
@@ -468,6 +510,25 @@ async def soft_delete_claim(claim_id: str):
         "claim_id": claim_id
     }
 
+
+@router.get("/users")
+async def get_all_users(
+    current_user: CurrentUser = Depends(get_current_user),
+):
+    if current_user.role != "admin":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Admin privileges required",
+        )
+
+    conn = DBConnection.get_connection()
+    queries = Queries(conn)
+
+    users = queries.get_all_non_admin_users()
+
+    return {
+        "users": users
+    }
 
 @router.put("/claims/{claim_id}/restore")
 async def restore_claim(claim_id: str):

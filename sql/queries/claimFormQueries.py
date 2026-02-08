@@ -48,7 +48,7 @@ class ClaimFormQueries:
 
         query = f"""
         INSERT INTO accident_claims ({', '.join(columns)})
-        VALUES ({values_placeholders})
+        VALUES ({values_placeholders})  
         ON CONFLICT (claim_id)
         DO UPDATE SET
             {set_clause}
@@ -396,7 +396,40 @@ class ClaimFormQueries:
             print(f"Error in create_user: {e}")
             self.conn.rollback()
             return None
+        
+    def delete_user(self, user_id: int) -> bool:
+        query = """
+            DELETE FROM users
+            WHERE id = %s
+            RETURNING id;
+        """
+        try:
+            with self.conn.cursor() as cur:
+                cur.execute(query, (user_id,))
+                row = cur.fetchone()
+                self.conn.commit()
+                return row is not None
+        except Exception as e:
+            print(f"Error in delete_user: {e}")
+            self.conn.rollback()
+            return False
 
+    def get_all_non_admin_users(self) -> list[dict]:
+        query = """
+            SELECT id, username, role
+            FROM users
+            WHERE role != 'admin'
+            ORDER BY id ASC;
+        """
+        try:
+            with self.conn.cursor() as cur:
+                cur.execute(query)
+                rows = cur.fetchall()
+                columns = [desc[0] for desc in cur.description]
+                return [dict(zip(columns, row)) for row in rows]
+        except Exception as e:
+            print(f"Error in get_all_non_admin_users: {e}")
+            return []
     # ────────────────────────────────────────────────
     #  Read-only methods — no need for try/except + rollback
     # ────────────────────────────────────────────────
