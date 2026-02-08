@@ -450,21 +450,6 @@ async def register_user(username: str, password: str, role: str):
 
 
 
-
-@router.post("/register")
-async def register_user(username: str, password: str, role: str):
-    conn = DBConnection.get_connection()
-    queries = Queries(conn)
-
-    hashed_password = hash_password(password)
-    user = queries.create_user(username, hashed_password, role)
-
-    if not user:
-        raise HTTPException(status_code=400, detail="User already exists")
-
-    return {"message": "User created successfully", "user": user}
-
-
 @router.put("/claims/{claim_id}/soft-delete")
 async def soft_delete_claim(claim_id: str):
     conn = DBConnection.get_connection()

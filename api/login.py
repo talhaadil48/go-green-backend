@@ -15,7 +15,7 @@ async def login_user(username: str, password: str):
     user = queries.get_user_by_username(username)
 
     if not user or not verify_password(password, user["password"]):
-        raise HTTPException(status_code=401, detail="Invalid username or password")
+        raise HTTPException(status_code=400, detail="Invalid username or password")
 
     token_data = {
         "sub": str(user["id"]),

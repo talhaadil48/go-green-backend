@@ -452,3 +452,16 @@ async def get_claim_documents(claim_id: str):
         "documents": result.get("documents", {})
     }
 
+
+
+@router.delete("/recently")
+async def delete_recently_deleted_claims():
+    conn = DBConnection.get_connection()
+    queries = Queries(conn)
+
+    deleted_count = queries.permanently_delete_recently_deleted_claims()
+
+    return {
+        "success": True,
+        "deleted_count": deleted_count
+    }

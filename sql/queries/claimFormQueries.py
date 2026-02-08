@@ -586,3 +586,20 @@ class ClaimFormQueries:
         except Exception as e:
             print(f"Error updating invoice_sent: {e}")
             return {}
+        
+        
+    def permanently_delete_recently_deleted_claims(self) -> int:
+        query = """
+            DELETE FROM claims
+            WHERE recently_deleted = TRUE
+            AND recently_deleted_date < NOW() - INTERVAL '3 days';
+        """
+        try:
+            with self.conn.cursor() as cur:
+                cur.execute(query)
+                deleted_count = cur.rowcount
+                self.conn.commit()
+                return deleted_count
+        except Exception as e:
+            print(f"Error deleting recently deleted claims: {e}")
+            return 0
