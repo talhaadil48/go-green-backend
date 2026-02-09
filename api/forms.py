@@ -15,7 +15,9 @@ security = HTTPBearer(
 )
 
 
-
+class InvoiceCreate(BaseModel):
+    claim_id: str
+    info: str
 class RegisterUserRequest(BaseModel):
     username: str
     password: str
@@ -623,3 +625,34 @@ async def get_pre_inspection_form_by_inspection_id(
     })
 
     return response
+
+
+@router.post("/invoice")
+async def create_invoice(data: InvoiceCreate):
+    conn = DBConnection.get_connection()
+    queries = Queries(conn)
+
+    invoice_id = queries.insert_invoice(data.claim_id, data.info)
+
+    if invoice_id == 0:
+        return {"success": False, "message": "Failed to create invoice"}
+
+    return {
+        "success": True,
+        "invoice_id": invoice_id
+    }
+    
+@router.get("/invoice/{claim_id}")
+async def get_invoices(claim_id: str):
+    conn = DBConnection.get_connection()
+    queries = Queries(conn)
+
+    invoices = queries.get_invoices_by_claim_id(claim_id)
+
+    return {
+        "success": True,
+        "count": len(invoices),
+        "data": invoices
+    }
+    
+    

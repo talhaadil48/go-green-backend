@@ -502,17 +502,29 @@ class ClaimFormQueries:
 
     def get_all_claims(self) -> list[dict]:
         query = """
-            SELECT *
-            FROM claims
-            WHERE recently_deleted = FALSE;
+            SELECT
+                c.*,
+                i.id AS invoice_id,
+                i.invoice_datetime,
+                i.info
+            FROM claims c
+            LEFT JOIN (
+                SELECT DISTINCT ON (claim_id)
+                    id,
+                    claim_id,
+                    invoice_datetime,
+                    info
+                FROM invoice
+                ORDER BY claim_id, invoice_datetime DESC
+            ) i
+            ON c.claim_id = i.claim_id
+            WHERE c.recently_deleted = FALSE;
         """
         with self.conn.cursor() as cur:
             cur.execute(query)
             rows = cur.fetchall()
             columns = [desc[0] for desc in cur.description]
             return [dict(zip(columns, row)) for row in rows]
-
-
     def get_claim_by_id(self, claim_id: str) -> dict | None:
         query = "SELECT * FROM claims WHERE claim_id = %s;"
         with self.conn.cursor() as cur:
@@ -636,3 +648,39 @@ class ClaimFormQueries:
         except Exception as e:
             print(f"Error deleting recently deleted claims: {e}")
             return 0
+        
+        
+    def insert_invoice(self, claim_id: str, info: str) -> int:
+        query = """
+            INSERT INTO invoice (claim_id, info)
+            VALUES (%s, %s)
+            RETURNING id;
+        """
+        try:
+            with self.conn.cursor() as cur:
+                cur.execute(query, (claim_id, info))
+                invoice_id = cur.fetchone()[0]
+                self.conn.commit()
+                return invoice_id
+        except Exception as e:
+            print(f"Error inserting invoice: {e}")
+            self.conn.rollback()
+            return 0
+        
+    def get_invoices_by_claim_id(self, claim_id: str):
+        query = """
+            SELECT id, claim_id, invoice_datetime, info
+            FROM invoice
+            WHERE claim_id = %s
+            ORDER BY invoice_datetime DESC;
+        """
+        try:
+            with self.conn.cursor() as cur:
+                cur.execute(query, (claim_id,))
+                rows = cur.fetchall()
+                return rows
+        except Exception as e:
+            print(f"Error fetching invoices: {e}")
+            return []
+        
+        
