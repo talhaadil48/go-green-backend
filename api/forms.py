@@ -347,7 +347,7 @@ async def create_claim(payload: Dict[str, Any]):
     council       = payload.get("council")          # ← new required field
     claim_id      = payload.get("claim_id")         # optional
 
-    if not all([claimant_name, claim_type, council]):
+    if not all([claimant_name, claim_type]):
         raise HTTPException(
             status_code=400,
             detail="claimant_name, claim_type and council are required"
