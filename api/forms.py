@@ -354,12 +354,13 @@ async def create_claim(payload: Dict[str, Any]):
         )
 
     try:
-        queries.insert_claim(
+        a = queries.insert_claim(
             claimant_name=claimant_name,
             claim_type=claim_type,
             council=council,                        # ← added
             claim_id=claim_id
         )
+        
     except UniqueViolation:
         conn.rollback()
         raise HTTPException(

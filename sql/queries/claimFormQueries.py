@@ -316,15 +316,11 @@ class ClaimFormQueries:
             INSERT INTO claims (claim_id, claimant_name, claim_type, council)
             VALUES (%s, %s, %s, %s);
         """
-        try:
-            with self.conn.cursor() as cur:
-                cur.execute(query, (claim_id, claimant_name, claim_type, council))
-                self.conn.commit()
-            return True
-        except Exception as e:
-            print(f"Error in insert_claim: {e}")
-            self.conn.rollback()
-            return False
+        with self.conn.cursor() as cur:
+            cur.execute(query, (claim_id, claimant_name, claim_type, council))
+            self.conn.commit()
+        return True
+      
     def delete_claim(self, claim_id: str) -> bool:
         query = """
             DELETE FROM claims
