@@ -15,7 +15,7 @@ load_dotenv(dotenv_path=ENV_PATH)
 class DBConnection:
     _connection = None
     _max_retries = 3
-    _retry_delay = 2  # seconds
+    _retry_delay = 0.01  # seconds
 
     @classmethod
     def _connect(cls):
