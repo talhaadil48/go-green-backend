@@ -679,4 +679,21 @@ class ClaimFormQueries:
             print(f"Error fetching invoices: {e}")
             return []
         
-        
+
+    def change_user_password(self, username: str, new_password: str) -> bool:
+        query = """
+            UPDATE users
+            SET password = %s
+            WHERE username = %s
+            RETURNING id;
+        """
+        try:
+            with self.conn.cursor() as cur:
+                cur.execute(query, (new_password, username))
+                row = cur.fetchone()
+                self.conn.commit()
+                return row is not None
+        except Exception as e:
+            print(f"Error in change_user_password: {e}")
+            self.conn.rollback()
+            return False

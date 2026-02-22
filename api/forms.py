@@ -9,6 +9,9 @@ from pydantic import BaseModel
 from utils.jwt_handler import decode_token
 from fastapi import status
 
+
+
+
 security = HTTPBearer(
     scheme_name="Bearer",
     description="JWT Authorization header using the Bearer scheme"
@@ -18,6 +21,10 @@ security = HTTPBearer(
 class InvoiceCreate(BaseModel):
     claim_id: str
     info: str
+class ChangePasswordRequest(BaseModel):
+    username: str
+    new_password: str
+
 class RegisterUserRequest(BaseModel):
     username: str
     password: str
@@ -478,6 +485,34 @@ async def register_user(
 
     return {"message": "User created successfully"}
 
+@router.put("/change-password")
+async def change_password(
+    data: ChangePasswordRequest,
+    current_user: CurrentUser = Depends(get_current_user),
+):
+    if current_user.role != "admin":
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Admin privileges required",
+        )
+
+    conn = DBConnection.get_connection()
+    queries = Queries(conn)
+
+    hashed_password = hash_password(data.new_password)
+
+    success = queries.change_user_password(
+        data.username,
+        hashed_password
+    )
+
+    if not success:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail="User not found",
+        )
+
+    return {"message": "Password updated successfully"}
 
     
 @router.delete("/users/{user_id}")
