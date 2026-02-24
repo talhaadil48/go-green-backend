@@ -180,3 +180,5 @@ cython_debug/
 test.py
 .vercel
 .cert
+
+.vscode/

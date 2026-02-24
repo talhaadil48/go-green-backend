@@ -692,3 +692,29 @@ async def get_invoices(claim_id: str):
     }
     
     
+
+
+@router.put("/claims/{claim_id}")
+async def update_claimant_name(claim_id: str, payload: Dict[str, Any]):
+    conn = DBConnection.get_connection()
+    queries = Queries(conn)
+
+    new_name = payload.get("claimant_name")
+    if not new_name:
+        raise HTTPException(
+            status_code=400,
+            detail="claimant_name is required"
+        )
+
+    try:
+        updated = queries.update_claimant_name(claim_id=claim_id, new_name=new_name)
+        if not updated:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Claim with id {claim_id} not found"
+            )
+    except Exception as e:
+        conn.rollback()
+        raise HTTPException(status_code=500, detail=str(e))
+
+    return {"message": "Claimant name updated successfully", "claim_id": claim_id}

@@ -320,7 +320,9 @@ class ClaimFormQueries:
             cur.execute(query, (claim_id, claimant_name, claim_type, council))
             self.conn.commit()
         return True
-      
+    
+
+
     def delete_claim(self, claim_id: str) -> bool:
         query = """
             DELETE FROM claims
@@ -337,6 +339,17 @@ class ClaimFormQueries:
             print(f"Error in delete_claim: {e}")
             self.conn.rollback()
             return False
+        
+    def update_claimant_name(self, claim_id: str, new_name: str) -> bool:
+        query = """
+            UPDATE claims
+            SET claimant_name = %s
+            WHERE claim_id = %s;
+        """
+        with self.conn.cursor() as cur:
+            cur.execute(query, (new_name, claim_id))
+            self.conn.commit()
+            return cur.rowcount > 0  # True if any row was updated
 
     def upsert_claim_documents(self, claim_id: str, documents: dict) -> None:
         query = """
