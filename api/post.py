@@ -465,3 +465,126 @@ async def delete_recently_deleted_claims():
         "success": True,
         "deleted_count": deleted_count
     }
+
+
+
+
+@router.post("/hire-checklists")
+async def upsert_hire_checklist(request: Request) -> Dict[str, Any]:
+    """
+    Create new hire checklist or update existing one.
+
+    Required in body:
+      - long_claim_id: str
+      - car_id:       int
+      - claimant_id:  int
+
+    Optional:
+      - inspection_id: str/int   → if provided → update that existing row
+
+    Accepts partial updates (only fields sent in the body are updated).
+    """
+    try:
+        incoming_data: dict = await request.json()
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid or missing JSON body")
+
+    # ─── Required composite keys ─────────────────────────────────────
+    long_claim_id = incoming_data.get("long_claim_id")
+    car_id        = incoming_data.get("car_id")
+    claimant_id   = incoming_data.get("claimant_id")
+
+    if not long_claim_id or not isinstance(long_claim_id, str) or not long_claim_id.strip():
+        raise HTTPException(
+            status_code=400,
+            detail="long_claim_id is required and must be a non-empty string"
+        )
+    if not isinstance(car_id, int):
+        raise HTTPException(status_code=400, detail="car_id must be an integer")
+    if not isinstance(claimant_id, int):
+        raise HTTPException(status_code=400, detail="claimant_id must be an integer")
+
+    inspection_id = incoming_data.get("inspection_id")  # optional
+
+    # Remove identifier fields from update payload
+    update_data = {
+        k: v for k, v in incoming_data.items()
+        if k not in ("long_claim_id", "car_id", "claimant_id", "inspection_id")
+    }
+
+    conn = DBConnection.get_connection()   # ← your connection factory
+    queries = Queries(conn)
+
+    if inspection_id:
+        result = queries.upsert_hire_checklist(
+            long_claim_id=long_claim_id,
+            car_id=car_id,
+            claimant_id=claimant_id,
+            data=update_data,
+            inspection_id=inspection_id
+        )
+    else:
+        result = queries.upsert_hire_checklist(
+            long_claim_id=long_claim_id,
+            car_id=car_id,
+            claimant_id=claimant_id,
+            data=update_data
+        )
+
+    if not result:
+        raise HTTPException(status_code=500, detail="Failed to save hire checklist")
+
+    # ─── Response — includes all columns that exist in your table ─────
+    response = {
+        "inspection_id":           result["inspection_id"],
+        "long_claim_id":           result["long_claim_id"],
+        "car_id":                  result["car_id"],
+        "claimant_id":             result["claimant_id"],
+
+        "condition_1":  result.get("condition_1",  ""),
+        "condition_2":  result.get("condition_2",  ""),
+        "condition_3":  result.get("condition_3",  ""),
+        "condition_4":  result.get("condition_4",  ""),
+        "condition_5":  result.get("condition_5",  ""),
+        "condition_6":  result.get("condition_6",  ""),
+        "condition_7":  result.get("condition_7",  ""),
+        "condition_8":  result.get("condition_8",  ""),
+        "condition_9":  result.get("condition_9",  ""),
+        "condition_10": result.get("condition_10", ""),
+        "condition_11": result.get("condition_11", ""),
+        "condition_12": result.get("condition_12", ""),
+        "condition_13": result.get("condition_13", ""),
+        "condition_14": result.get("condition_14", ""),
+        "condition_15": result.get("condition_15", ""),
+        "condition_16": result.get("condition_16", ""),
+        "condition_17": result.get("condition_17", ""),
+        "condition_18": result.get("condition_18", ""),
+        "condition_19": result.get("condition_19", ""),
+        "condition_20": result.get("condition_20", ""),
+        "condition_21": result.get("condition_21", ""),
+        "condition_22": result.get("condition_22", ""),
+        "condition_23": result.get("condition_23", ""),
+        "condition_24": result.get("condition_24", ""),
+        "condition_25": result.get("condition_25", ""),
+        "condition_26": result.get("condition_26", ""),
+        "condition_27": result.get("condition_27", ""),
+        "condition_28": result.get("condition_28", ""),
+        "condition_29": result.get("condition_29", ""),
+        "condition_30": result.get("condition_30", ""),
+
+        "date":                    result.get("date", ""),
+        "customer":                result.get("customer", ""),
+        "detailer":                result.get("detailer", ""),
+        "order_number":            result.get("order_number", ""),
+        "year":                    result.get("year", ""),
+        "make":                    result.get("make", ""),
+        "model":                   result.get("model", ""),
+        "notes":                   result.get("notes", ""),
+        "recommendations":         result.get("recommendations", ""),
+        "customer_signature":      result.get("customer_signature", None),
+        "detailer_signature":      result.get("detailer_signature", None),
+        "base_vehicle_image":      result.get("base_vehicle_image", None),
+        "annotated_vehicle_image": result.get("annotated_vehicle_image", None),
+    }
+
+    return response

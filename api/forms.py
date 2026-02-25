@@ -6,9 +6,9 @@ from utils.hashing import hash_password
 from psycopg2.errors import UniqueViolation
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from pydantic import BaseModel
+from typing import Optional,List
 from utils.jwt_handler import decode_token
 from fastapi import status
-
 
 
 
@@ -34,6 +34,41 @@ class CurrentUser(BaseModel):
     username: str
     role: str
     permissions: dict = {}
+class LongClaimCreate(BaseModel):
+    starting_date: str
+    ending_date: str
+
+class LongClaimCarAction(BaseModel):
+    car_id: int
+
+class CarCreate(BaseModel):
+    model: Optional[str] = None
+    name: Optional[str] = None
+    reg_no: Optional[str] = None
+
+class CarUpdate(BaseModel):
+    model: Optional[str] = None
+    name: Optional[str] = None
+    reg_no: Optional[str] = None
+class ClaimantCreate(BaseModel):
+    long_claim_id: str
+    car_id: int
+
+    start_date: Optional[str] = None
+    end_date: Optional[str] = None
+    miles: Optional[float] = None
+    name: Optional[str] = None
+    location: Optional[str] = None
+    delivery_charges: Optional[float] = 0
+
+
+class ClaimantUpdate(BaseModel):
+    start_date: Optional[str] = None
+    end_date: Optional[str] = None
+    miles: Optional[float] = None
+    name: Optional[str] = None
+    location: Optional[str] = None
+    delivery_charges: Optional[float] = None
 def get_current_user(
     credentials: HTTPAuthorizationCredentials = Depends(security)
 ) -> CurrentUser:
@@ -691,8 +726,6 @@ async def get_invoices(claim_id: str):
         "data": invoices
     }
     
-    
-
 
 @router.put("/claims/{claim_id}")
 async def update_claimant_name(claim_id: str, payload: Dict[str, Any]):
@@ -718,3 +751,391 @@ async def update_claimant_name(claim_id: str, payload: Dict[str, Any]):
         raise HTTPException(status_code=500, detail=str(e))
 
     return {"message": "Claimant name updated successfully", "claim_id": claim_id}
+
+
+
+@router.post("/car")
+async def create_car(payload: CarCreate):
+    conn = DBConnection.get_connection()
+    queries = Queries(conn)
+
+    queries.insert_car(
+        payload.model,
+        payload.name,
+        payload.reg_no
+    )
+
+    return {
+        "success": True,
+        "message": "Car created successfully"
+    }
+
+@router.delete("/car/{car_id}")
+async def delete_car(car_id: str):
+    conn = DBConnection.get_connection()
+    queries = Queries(conn)
+
+    deleted = queries.delete_car(car_id)
+    if deleted:
+        return {
+            "success": True,
+            "message": "Car deleted successfully"
+        }
+    else:
+        return {
+            "success": False,
+            "message": f"No car found with id {car_id}"
+        }
+
+@router.put("/car/{car_id}")
+async def update_car(car_id: int, payload: CarUpdate):
+    conn = DBConnection.get_connection()
+    queries = Queries(conn)
+
+    updated = queries.update_car(
+        car_id,
+        payload.model,
+        payload.name,
+        payload.reg_no
+    )
+
+    if not updated:
+        raise HTTPException(status_code=404, detail="Car not found")
+
+    return {
+        "success": True,
+        "message": "Car updated successfully"
+    }
+
+
+@router.get("/car/{car_id}")
+async def get_car_by_id(car_id: int):
+    conn = DBConnection.get_connection()
+    queries = Queries(conn)
+
+    car = queries.get_car_by_id(car_id)
+    if not car:
+        raise HTTPException(status_code=404, detail="Car not found")
+
+    return {
+        "success": True,
+        "data": car
+    }
+
+
+@router.get("/cars")
+async def get_all_cars():
+    conn = DBConnection.get_connection()
+    queries = Queries(conn)
+
+    cars = queries.get_all_cars()
+
+    return {
+        "success": True,
+        "count": len(cars),
+        "data": cars
+    }
+
+# ---------------------- LONG CLAIMS ----------------------
+@router.post("/long-claim")
+async def create_long_claim(payload: LongClaimCreate):
+    conn = DBConnection.get_connection()
+    queries = Queries(conn)
+
+    long_claim_id = queries.insert_long_claim(
+        payload.starting_date,
+        payload.ending_date
+    )
+
+    return {
+        "success": True,
+        "long_claim_id": long_claim_id
+    }
+
+
+@router.post("/long-claim/{long_claim_id}/add-car")
+async def add_car_to_long_claim(long_claim_id: str, payload: LongClaimCarAction):
+    conn = DBConnection.get_connection()
+    queries = Queries(conn)
+
+    queries.add_car_to_long_claim(long_claim_id, payload.car_id)
+
+    return {
+        "success": True,
+        "message": "Car added to long claim"
+    }
+
+
+@router.delete("/long-claim/{long_claim_id}/remove-car/{car_id}")
+async def remove_car_from_long_claim(long_claim_id: str, car_id: int):
+    conn = DBConnection.get_connection()
+    queries = Queries(conn)
+
+    queries.remove_car_from_long_claim(long_claim_id, car_id)
+
+    return {
+        "success": True,
+        "message": "Car removed from long claim"
+    }
+
+@router.get("/long-claims")
+async def get_all_long_claims():
+    conn = DBConnection.get_connection()
+    queries = Queries(conn)
+
+    claims = queries.get_all_long_claims()
+
+    return {
+        "success": True,
+        "count": len(claims),
+        "data": claims
+    }
+
+
+
+# ---------------------- CLAIMANT ----------------------
+@router.post("/claimant")
+async def create_claimant(payload: ClaimantCreate):
+    conn = DBConnection.get_connection()
+    queries = Queries(conn)
+
+    claimant_id = queries.insert_claimant(
+        payload.long_claim_id,
+        payload.car_id,
+        payload.start_date,
+        payload.end_date,
+        payload.miles,
+        payload.name,
+        payload.location,
+        payload.delivery_charges or 0  # default to 0 if None
+    )
+
+    return {
+        "success": True,
+        "claimant_id": claimant_id
+    }
+
+
+@router.put("/claimant/{claimant_id}")
+async def update_claimant(claimant_id: int, payload: ClaimantUpdate):
+    conn = DBConnection.get_connection()
+    queries = Queries(conn)
+
+    queries.update_claimant(
+        claimant_id,
+        start_date=payload.start_date,
+        end_date=payload.end_date,
+        miles=payload.miles,
+        name=payload.name,
+        location=payload.location,
+        delivery_charges=payload.delivery_charges
+    )
+
+    return {
+        "success": True,
+        "message": "Claimant updated successfully"
+    }
+
+
+@router.delete("/claimant/{claimant_id}")
+async def delete_claimant(claimant_id: int):
+    conn = DBConnection.get_connection()
+    queries = Queries(conn)
+
+    deleted = queries.delete_claimant(claimant_id)
+    if deleted:
+        return {"success": True, "message": "Claimant deleted successfully"}
+    else:
+        return {"success": False, "message": "Claimant not found"}
+
+
+@router.get("/claimant/{claimant_id}")
+async def get_claimant_by_id(claimant_id: int):
+    conn = DBConnection.get_connection()
+    queries = Queries(conn)
+
+    data = queries.get_claimant(claimant_id=claimant_id)
+
+    return {
+        "success": True,
+        "count": len(data),
+        "data": data
+    }
+
+
+@router.get("/claimants")
+async def get_all_claimants():
+    conn = DBConnection.get_connection()
+    queries = Queries(conn)
+
+    data = queries.get_all_claimants()
+
+    return {
+        "success": True,
+        "count": len(data),
+        "data": data
+    }
+
+# ---------------------- HIRE CHECKLIST ----------------------
+
+
+
+@router.get("/long-claim/{long_claim_id}/cars")
+async def get_cars_for_long_claim(long_claim_id: str):
+    conn = DBConnection.get_connection()
+    queries = Queries(conn)
+
+    data = queries.get_cars_by_long_claim(long_claim_id)
+
+    return {
+        "success": True,
+        "count": len(data),
+        "data": data
+    }
+
+@router.get("/car/{car_id}/claimants")
+async def get_claimants_for_car(car_id: int):
+    conn = DBConnection.get_connection()
+    queries = Queries(conn)
+
+    data = queries.get_claimants_by_car(car_id)
+
+    return {
+        "success": True,
+        "count": len(data),
+        "data": data
+    }
+
+
+@router.get("/long-claims/{claim_id}")
+async def get_long_claim_by_id(claim_id: str):
+    conn = DBConnection.get_connection()
+    queries = Queries(conn)
+    claim = queries.get_long_claim_by_id(claim_id)
+    if not claim:
+        return {
+            "success": False,
+            "message": f"Long claim with id {claim_id} not found"
+        }
+
+    return {
+        "success": True,
+        "data": claim
+    }
+
+
+@router.put("/long-claim/{long_claim_id}/mark-invoice")
+async def mark_invoice(long_claim_id: str):
+    conn = DBConnection.get_connection()
+    queries = Queries(conn)
+
+    updated = queries.mark_invoice(long_claim_id)
+    if updated:
+        return {"success": True, "message": "Invoice marked as true"}
+    else:
+        return {"success": False, "message": "Long claim not found"}
+    
+
+
+@router.put("/long-claims/{claim_id}/restore")
+async def restore_claim(claim_id: str):
+    conn = DBConnection.get_connection()
+    queries = Queries(conn)
+    restored = queries.restore_claim(claim_id)
+    if restored == 0:
+        return {"success": False, "message": "Claim not found"}
+    return {"success": True, "message": f"Claim {claim_id} restored successfully."}
+
+
+@router.delete("/long-claims/{claim_id}/delete")
+async def delete_long_claim(claim_id: str):
+    conn = DBConnection.get_connection()
+    queries = Queries(conn)
+    deleted = queries.delete_long_claim(claim_id)
+    if deleted == 0:
+        return {"success": False, "message": "Claim not found"}
+    return {"success": True, "message": f"Claim {claim_id} deleted permanently."}
+
+
+@router.patch("/long-claims/{claim_id}/mark-deleted")
+async def mark_recently_deleted(claim_id: str):
+    conn = DBConnection.get_connection()
+    queries = Queries(conn)
+    updated = queries.mark_as_recently_deleted(claim_id)
+    if updated == 0:
+        return {"success": False, "message": "Claim not found"}
+    return {"success": True, "message": f"Claim {claim_id} marked as recently deleted."}
+
+
+
+@router.get("/long/soft-deleted")
+async def get_soft_deleted_long_claims():
+    conn = DBConnection.get_connection()
+    queries = Queries(conn)
+
+    claims = queries.get_soft_deleted_long_claims()
+
+    return {
+        "success": True,
+        "count": len(claims),
+        "data": claims
+    }
+
+
+@router.get("/hire-checklists/{long_claim_id}/{car_id}/{claimant_id}")
+async def get_hire_checklists(
+    long_claim_id: str,
+    car_id: int,
+    claimant_id: int
+) -> List[Dict[str, Any]]:
+    """
+    Get ALL hire checklists for the given claim + car + claimant combination.
+    
+    Path parameters:
+      - long_claim_id : str
+      - car_id        : int
+      - claimant_id   : int
+    
+    Returns:
+      - list of checklists (each as dict)
+      - empty list [] if no checklists exist
+    """
+    conn = DBConnection.get_connection()
+    queries = Queries(conn)
+
+    results = queries.get_hire_checklists(
+        long_claim_id=long_claim_id,
+        car_id=car_id,
+        claimant_id=claimant_id
+    )
+
+    response_list = []
+
+    for result in results:
+        item = {
+            # All 30 condition fields
+            **{f"condition_{i}": result.get(f"condition_{i}", "") for i in range(1, 31)},
+            # Main metadata fields
+            "date": result.get("date", ""),
+            "customer": result.get("customer", ""),
+            "detailer": result.get("detailer", ""),
+            "order_number": result.get("order_number", ""),
+            "year": result.get("year", ""),
+            "make": result.get("make", ""),
+            "model": result.get("model", ""),
+            "notes": result.get("notes", ""),
+            "recommendations": result.get("recommendations", ""),
+            # Signatures & images (allow None / null)
+            "customer_signature": result.get("customer_signature"),
+            "detailer_signature": result.get("detailer_signature"),
+            "base_vehicle_image": result.get("base_vehicle_image"),
+            "annotated_vehicle_image": result.get("annotated_vehicle_image"),
+            # Identifying keys
+            "long_claim_id": result["long_claim_id"],
+            "car_id": result["car_id"],
+            "claimant_id": result["claimant_id"],
+            "inspection_id": result["inspection_id"],
+        }
+        response_list.append(item)
+
+    return response_list

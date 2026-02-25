@@ -1,6 +1,8 @@
 from datetime import datetime, timezone
 from typing import Optional
 import json
+from psycopg2.extras import RealDictCursor
+
 
 
 class ClaimFormQueries:
@@ -710,3 +712,459 @@ class ClaimFormQueries:
             print(f"Error in change_user_password: {e}")
             self.conn.rollback()
             return False
+
+    def insert_car(self, model, name, reg_no) -> bool:
+        try:
+            query = """
+                INSERT INTO cars (model, name, reg_no)
+                VALUES (%s, %s, %s)
+            """
+            with self.conn.cursor() as cur:
+                cur.execute(query, (model, name, reg_no))
+            self.conn.commit()
+            return True
+        except Exception as e:
+            self.conn.rollback()
+            raise e
+
+    def update_car(self, car_id, model, name, reg_no) -> bool:
+        try:
+            query = """
+                UPDATE cars
+                SET model=%s, name=%s, reg_no=%s
+                WHERE id=%s
+            """
+            with self.conn.cursor() as cur:
+                cur.execute(query, (model, name, reg_no, car_id))
+            self.conn.commit()
+            return True
+        except Exception as e:
+            self.conn.rollback()
+            raise e
+
+    def get_car_by_id(self, car_id: int):
+        query = "SELECT * FROM cars WHERE id=%s"
+        with self.conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute(query, (car_id,))
+            return cur.fetchone()
+
+    def get_all_cars(self):
+        query = "SELECT * FROM cars"
+        with self.conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute(query)
+            return cur.fetchall()
+    # ---------------------- LONG CLAIMS ----------------------
+    def insert_long_claim(self, starting_date, ending_date):
+        try:
+            query = "INSERT INTO long_claims (starting_date, ending_date) VALUES (%s, %s) RETURNING id;"
+            with self.conn.cursor() as cur:
+                cur.execute(query, (starting_date, ending_date))
+                long_claim_id = cur.fetchone()[0]
+                self.conn.commit()
+            return long_claim_id
+        except Exception as e:
+            self.conn.rollback()
+            raise e
+
+    def add_car_to_long_claim(self, long_claim_id: str, car_id: int):
+        try:
+            query = "INSERT INTO long_claim_cars (long_claim_id, car_id) VALUES (%s, %s);"
+            with self.conn.cursor() as cur:
+                cur.execute(query, (long_claim_id, car_id))
+                self.conn.commit()
+            return True
+        except Exception as e:
+            self.conn.rollback()
+            raise e
+
+    def remove_car_from_long_claim(self, long_claim_id: str, car_id: int):
+        try:
+            query = "DELETE FROM long_claim_cars WHERE long_claim_id=%s AND car_id=%s;"
+            with self.conn.cursor() as cur:
+                cur.execute(query, (long_claim_id, car_id))
+                self.conn.commit()
+            return True
+        except Exception as e:
+            self.conn.rollback()
+            raise e
+
+    # ---------------------- CLAIMANT ----------------------
+    def insert_claimant(
+    self,
+    long_claim_id,
+    car_id,
+    start_date=None,
+    end_date=None,
+    miles=None,
+    name=None,
+    location=None,
+    delivery_charges=0
+):
+        try:
+            query = """
+                INSERT INTO claimant
+                (long_claim_id, car_id, start_date, end_date, miles, name, location, delivery_charges)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                RETURNING id
+            """
+            with self.conn.cursor() as cur:
+                cur.execute(
+                    query,
+                    (long_claim_id, car_id, start_date, end_date, miles, name, location, delivery_charges)
+                )
+                claimant_id = cur.fetchone()[0]
+            self.conn.commit()
+            return claimant_id
+        except Exception as e:
+            self.conn.rollback()
+            raise e
+
+
+    def update_claimant(
+        self,
+        claimant_id,
+        start_date=None,
+        end_date=None,
+        miles=None,
+        name=None,
+        location=None,
+        delivery_charges=None
+    ):
+        try:
+            # Build dynamic update to skip None fields
+            fields = []
+            values = []
+
+            if start_date is not None:
+                fields.append("start_date=%s")
+                values.append(start_date)
+            if end_date is not None:
+                fields.append("end_date=%s")
+                values.append(end_date)
+            if miles is not None:
+                fields.append("miles=%s")
+                values.append(miles)
+            if name is not None:
+                fields.append("name=%s")
+                values.append(name)
+            if location is not None:
+                fields.append("location=%s")
+                values.append(location)
+            if delivery_charges is not None:
+                fields.append("delivery_charges=%s")
+                values.append(delivery_charges)
+
+            if not fields:
+                return False  # Nothing to update
+
+            query = f"""
+                UPDATE claimant
+                SET {', '.join(fields)}
+                WHERE id=%s
+            """
+            values.append(claimant_id)
+
+            with self.conn.cursor() as cur:
+                cur.execute(query, tuple(values))
+
+            self.conn.commit()
+            return True
+        except Exception as e:
+            self.conn.rollback()
+            raise e
+
+    def delete_claimant(self, claimant_id: int):
+        try:
+            query = "DELETE FROM claimant WHERE id=%s"
+            with self.conn.cursor() as cur:
+                cur.execute(query, (claimant_id,))
+            self.conn.commit()
+            return cur.rowcount > 0  # True if a row was deleted
+        except Exception as e:
+            self.conn.rollback()
+            raise e
+    def get_claimant(self, claimant_id=None, long_claim_id=None, car_id=None):
+        query = "SELECT * FROM claimant WHERE 1=1"
+        params = []
+
+        if claimant_id:
+            query += " AND id=%s"
+            params.append(claimant_id)
+
+        if long_claim_id:
+            query += " AND long_claim_id=%s"
+            params.append(long_claim_id)
+
+        if car_id:
+            query += " AND car_id=%s"
+            params.append(car_id)
+
+        with self.conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute(query, params)
+            return cur.fetchall()
+
+    def get_all_claimants(self):
+        query = "SELECT * FROM claimant ORDER BY id DESC"
+        with self.conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute(query)
+            return cur.fetchall()
+    # ---------------------- HIRE CHECKLIST ----------------------
+  
+
+    def get_all_long_claims(self):
+        query = """
+            SELECT
+                id,
+                starting_date,
+                ending_date,
+                invoice_sent,
+                date_sent
+                
+            FROM long_claims
+            WHERE recently_deleted = FALSE
+            ORDER BY id DESC
+        """
+        with self.conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute(query)
+            return cur.fetchall()
+        
+
+
+    def get_claimants_by_car(self, car_id):
+        query = """
+            SELECT *
+            FROM claimant
+            WHERE car_id = %s
+        """
+        with self.conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute(query, (car_id,))
+            return cur.fetchall()
+        
+    def get_cars_by_long_claim(self, long_claim_id):
+        query = """
+            SELECT c.*
+            FROM long_claim_cars lcc
+            JOIN cars c ON c.id = lcc.car_id
+            WHERE lcc.long_claim_id = %s
+        """
+        with self.conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute(query, (long_claim_id,))
+            return cur.fetchall()
+
+    def get_long_claim_by_id(self, claim_id):
+        query = """
+            SELECT
+                id,
+                starting_date,
+                ending_date,
+                invoice_sent
+            FROM long_claims
+            WHERE id = %s
+        """
+        with self.conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute(query, (claim_id,))
+            return cur.fetchone()
+        
+
+
+    def mark_invoice(self, long_claim_id: str):
+        try:
+            query = """
+                UPDATE long_claims
+                SET invoice_sent = TRUE,
+                    date_sent = CURRENT_DATE
+                WHERE id = %s
+            """
+            with self.conn.cursor() as cur:
+                cur.execute(query, (long_claim_id,))
+            self.conn.commit()
+            return cur.rowcount > 0  # True if a row was updated
+        except Exception as e:
+            self.conn.rollback()
+            raise e
+
+    def mark_as_recently_deleted(self, claim_id: str):
+        query = """
+            UPDATE long_claims
+            SET recently_deleted = TRUE,
+                recently_deleted_date = NOW()
+            WHERE id = %s
+        """
+        with self.conn.cursor() as cur:
+            cur.execute(query, (claim_id,))
+            self.conn.commit()
+            return cur.rowcount
+        
+    def delete_long_claim(self, claim_id: str):
+        query = "DELETE FROM long_claims WHERE id = %s"
+        with self.conn.cursor() as cur:
+            cur.execute(query, (claim_id,))
+            self.conn.commit()
+            return cur.rowcount > 0  # True if a row was deleted
+        
+    def restore_claim(self, claim_id: str):
+        query = """
+            UPDATE long_claims
+            SET recently_deleted = FALSE,
+                recently_deleted_date = NULL
+            WHERE id = %s
+        """
+        with self.conn.cursor() as cur:
+            cur.execute(query, (claim_id,))
+            self.conn.commit()
+            return cur.rowcount
+        
+
+    def get_soft_deleted_long_claims(self):
+        query = """
+            SELECT
+                id,
+                starting_date,
+                ending_date,
+                invoice_sent,
+                date_sent
+            FROM long_claims
+            WHERE recently_deleted = TRUE
+            ORDER BY id DESC
+        """
+        with self.conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute(query)
+            return cur.fetchall()
+
+
+
+    def upsert_hire_checklist(
+    self,
+    long_claim_id: str,
+    car_id: int,
+    claimant_id: int,
+    data: dict,
+    inspection_id = None
+) -> dict | None:
+        """
+        Upsert logic for hire_checklist table.
+        • inspection_id provided → UPDATE that row
+        • no inspection_id     → INSERT new row
+        """
+        updatable_columns = [
+            "condition_1", "condition_2", "condition_3", "condition_4", "condition_5",
+            "condition_6", "condition_7", "condition_8", "condition_9", "condition_10",
+            "condition_11", "condition_12", "condition_13", "condition_14", "condition_15",
+            "condition_16", "condition_17", "condition_18", "condition_19", "condition_20",
+            "condition_21", "condition_22", "condition_23", "condition_24", "condition_25",
+            "condition_26", "condition_27", "condition_28", "condition_29", "condition_30",
+            "date", "customer", "detailer", "order_number",
+            "year", "make", "model",
+            "notes", "recommendations",
+            "customer_signature", "detailer_signature",
+            "base_vehicle_image", "annotated_vehicle_image"
+        ]
+
+        fields_to_update = [col for col in updatable_columns if col in data]
+
+        # If caller sent no updatable fields → just return current record (if exists)
+        if not fields_to_update:
+            if inspection_id:
+                # You should implement get_hire_checklist(inspection_id) if you want this behaviour
+                return self.get_hire_checklist(inspection_id)  # ← placeholder
+            records = self.get_hire_checklists_by_claim(long_claim_id, car_id, claimant_id)
+            return records[0] if records else None
+
+        try:
+            with self.conn.cursor() as cur:
+
+                if inspection_id:
+                    # ─── UPSERT (INSERT or UPDATE on inspection_id) ───────────────
+                    columns = ["long_claim_id", "car_id", "claimant_id", "inspection_id"] + fields_to_update
+                    values_placeholders = ", ".join(f"%({col})s" for col in columns)
+                    set_clause = ", ".join(f"{col} = EXCLUDED.{col}" for col in fields_to_update)
+
+                    query = f"""
+                    INSERT INTO hire_checklist ({', '.join(columns)})
+                    VALUES ({values_placeholders})
+                    ON CONFLICT (inspection_id)
+                    DO UPDATE SET
+                        {set_clause}
+                    RETURNING *;
+                    """
+
+                    params = {
+                        "long_claim_id": long_claim_id,
+                        "car_id": car_id,
+                        "claimant_id": claimant_id,
+                        "inspection_id": inspection_id,
+                        **{col: data[col] for col in fields_to_update}
+                    }
+
+                else:
+                    # ─── INSERT new record ────────────────────────────────────────
+                    columns = ["long_claim_id", "car_id", "claimant_id"] + fields_to_update
+                    values_placeholders = ", ".join(f"%({col})s" for col in columns)
+
+                    query = f"""
+                    INSERT INTO hire_checklist ({', '.join(columns)})
+                    VALUES ({values_placeholders})
+                    RETURNING *;
+                    """
+
+                    params = {
+                        "long_claim_id": long_claim_id,
+                        "car_id": car_id,
+                        "claimant_id": claimant_id,
+                        **{col: data[col] for col in fields_to_update}
+                    }
+
+                cur.execute(query, params)
+                row = cur.fetchone()
+                if not row:
+                    self.conn.commit()
+                    return None
+
+                columns_list = [desc[0] for desc in cur.description]
+                self.conn.commit()
+                return dict(zip(columns_list, row))
+
+        except Exception as e:
+            print(f"Error in upsert_hire_checklist: {e}")
+            self.conn.rollback()
+            return None
+
+
+    def get_hire_checklists(
+    self,
+    long_claim_id: str,
+    car_id: int,
+    claimant_id: int
+) -> list[dict]:
+        """
+        Get ALL hire checklists matching the given long_claim_id + car_id + claimant_id.
+        Returns list of dictionaries (each = one checklist row), ordered by inspection_id.
+        Returns empty list if no records found.
+        """
+        query = """
+        SELECT * FROM hire_checklist
+        WHERE long_claim_id = %s
+        AND car_id = %s
+        AND claimant_id = %s
+        ORDER BY inspection_id ASC;
+        """
+        with self.conn.cursor() as cur:
+            cur.execute(query, (long_claim_id, car_id, claimant_id))
+            rows = cur.fetchall()
+            if rows:
+                columns = [desc[0] for desc in cur.description]
+                return [dict(zip(columns, row)) for row in rows]
+        return []
+                    
+    
+    # Query method in your Queries class
+    def delete_car(self, car_id: str) -> bool:
+        try:
+            query = "DELETE FROM cars WHERE id = %s"
+            with self.conn.cursor() as cur:
+                cur.execute(query, (car_id,))
+            self.conn.commit()
+            return cur.rowcount > 0  # Returns True if a row was deleted
+        except Exception as e:
+            self.conn.rollback()
+            raise e
