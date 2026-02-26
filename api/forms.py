@@ -35,8 +35,13 @@ class CurrentUser(BaseModel):
     role: str
     permissions: dict = {}
 class LongClaimCreate(BaseModel):
-    starting_date: str
-    ending_date: str
+    starting_date: Optional[str] = None
+    ending_date: Optional[str] = None
+
+class LongClaimUpdate(BaseModel):
+    long_claim_id: str
+    starting_date: Optional[str] = None
+    ending_date: Optional[str] = None
 
 class LongClaimCarAction(BaseModel):
     car_id: int
@@ -841,6 +846,10 @@ async def get_all_cars():
 async def create_long_claim(payload: LongClaimCreate):
     conn = DBConnection.get_connection()
     queries = Queries(conn)
+    if not payload.starting_date:
+        payload.starting_date = None
+    if not payload.ending_date:
+        payload.ending_date = None
 
     long_claim_id = queries.insert_long_claim(
         payload.starting_date,
@@ -850,6 +859,27 @@ async def create_long_claim(payload: LongClaimCreate):
     return {
         "success": True,
         "long_claim_id": long_claim_id
+    }
+
+@router.put("/long-claim")
+async def update_long_claim(payload: LongClaimUpdate):
+    conn = DBConnection.get_connection()
+    queries = Queries(conn)
+
+    if not payload.starting_date:
+        payload.starting_date = None
+    if not payload.ending_date:
+        payload.ending_date = None
+
+    queries.update_long_claim(
+        payload.long_claim_id,
+        payload.starting_date,
+        payload.ending_date
+    )
+
+    return {
+        "success": True,        
+        "message": "Long claim updated successfully"
     }
 
 
@@ -898,7 +928,10 @@ async def get_all_long_claims():
 async def create_claimant(payload: ClaimantCreate):
     conn = DBConnection.get_connection()
     queries = Queries(conn)
-
+    if not payload.start_date:
+        payload.start_date = None
+    if not payload.end_date:
+        payload.end_date = None
     claimant_id = queries.insert_claimant(
         payload.long_claim_id,
         payload.car_id,

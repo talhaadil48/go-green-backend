@@ -765,6 +765,21 @@ class ClaimFormQueries:
         except Exception as e:
             self.conn.rollback()
             raise e
+        
+    def update_long_claim(self, long_claim_id, starting_date, ending_date):
+        try:
+            query = """
+                UPDATE long_claims
+                SET starting_date = %s,
+                    ending_date = %s
+                WHERE id = %s;
+            """
+            with self.conn.cursor() as cur:
+                cur.execute(query, (starting_date, ending_date, long_claim_id))
+                self.conn.commit()
+        except Exception as e:
+            self.conn.rollback()
+            raise e
 
     def add_car_to_long_claim(self, long_claim_id: str, car_id: int):
         try:
