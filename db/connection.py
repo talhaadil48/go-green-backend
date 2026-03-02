@@ -83,3 +83,21 @@ class DBConnection:
             cls._connection.close()
             cls._connection = None
             print("Database connection closed.")
+
+
+
+def split_car_name_and_model():
+    query = """
+        SELECT * FROM claims;
+    """
+
+    with DBConnection.get_cursor() as cur:
+        cur.execute(query)
+        curaims = cur.fetchall()
+        print(curaims)
+
+    print("Claims table retrieved successfully.")
+
+
+if __name__ == "__main__":
+    split_car_name_and_model()

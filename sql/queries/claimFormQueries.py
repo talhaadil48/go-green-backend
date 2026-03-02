@@ -1,7 +1,8 @@
 from datetime import datetime, timezone
-from typing import Optional
+from typing import Any, Dict, List, Optional
 import json
 from psycopg2.extras import RealDictCursor
+from decimal import Decimal
 
 
 
@@ -442,7 +443,7 @@ class ClaimFormQueries:
             print(f"Error in get_all_non_admin_users: {e}")
             return []
     # ────────────────────────────────────────────────
-    #  Read-only methods — no need for try/except + rollback
+    #  Read-only methods  no need for try/except + rollback
     # ────────────────────────────────────────────────
 
     def get_accident_claim(self, claim_id: str) -> dict | None:
@@ -569,16 +570,17 @@ class ClaimFormQueries:
     
    
    
-    def soft_delete_claim(self, claim_id: str) -> bool:
+    def soft_delete_claim(self, claim_id: str, deleted_by: str) -> bool:
         query = """
             UPDATE claims
             SET recently_deleted = TRUE,
-                recently_deleted_date = NOW()
+                recently_deleted_date = NOW(),
+                deleted_by = %s
             WHERE claim_id = %s;
         """
         try:
             with self.conn.cursor() as cur:
-                cur.execute(query, (claim_id,))
+                cur.execute(query, (deleted_by, claim_id))
                 if cur.rowcount == 0:
                     return False
                 self.conn.commit()
@@ -587,19 +589,20 @@ class ClaimFormQueries:
             print(f"Error in soft_delete_claim: {e}")
             self.conn.rollback()
             return False
-
-    def restore_claim(self, claim_id: str) -> bool:
+        
+    def restore_short_claim(self, claim_id: str) -> bool:
+        print("hello")
         query = """
             UPDATE claims
             SET recently_deleted = FALSE,
-                recently_deleted_date = NOW()
+                recently_deleted_date = NOW(),
+                deleted_by = NULL
             WHERE claim_id = %s;
         """
         try:
             with self.conn.cursor() as cur:
                 cur.execute(query, (claim_id,))
-                if cur.rowcount == 0:
-                    return False
+                print(f"restore_claim affected {cur.rowcount} rows")
                 self.conn.commit()
             return True
         except Exception as e:
@@ -624,23 +627,6 @@ class ClaimFormQueries:
             print(f"Error fetching recently deleted claims: {e}")
             return []
 
-    def mark_invoice_sent(self, claim_id: int) -> dict:
-        query = """
-            UPDATE claims
-            SET invoice_sent = 'Sent'
-            WHERE claim_id = %s
-            RETURNING *;
-        """
-        try:
-            with self.conn.cursor() as cur:
-                cur.execute(query, (claim_id,))
-                row = cur.fetchone()
-                if not row:
-                    return {}  # claim_id not found
-                columns = [desc[0] for desc in cur.description]
-                return dict(zip(columns, row))
-        except Exception as e:
-            print(f"Error updating invoice_sent: {e}")
             return {}
         
         
@@ -660,16 +646,30 @@ class ClaimFormQueries:
             print(f"Error deleting recently deleted claims: {e}")
             return 0
         
-        
-    def insert_invoice(self, claim_id: str, info: str) -> int:
+    def insert_invoice(
+    self,
+    claim_id: str,
+    info: str,
+    docs: list,
+    storage_bill: float,
+    rent_bill: float
+) -> int:
+
         query = """
-            INSERT INTO invoice (claim_id, info)
-            VALUES (%s, %s)
+            INSERT INTO invoice (claim_id, info, docs, storage_bill, rent_bill)
+            VALUES (%s, %s, %s, %s, %s)
             RETURNING id;
         """
+
         try:
             with self.conn.cursor() as cur:
-                cur.execute(query, (claim_id, info))
+                cur.execute(query, (
+                    claim_id,
+                    info,
+                    docs,          # psycopg2 automatically converts list → postgres array
+                    storage_bill,
+                    rent_bill
+                ))
                 invoice_id = cur.fetchone()[0]
                 self.conn.commit()
                 return invoice_id
@@ -677,10 +677,37 @@ class ClaimFormQueries:
             print(f"Error inserting invoice: {e}")
             self.conn.rollback()
             return 0
+
+
+    def get_all_invoices(self):
+        query = """
+            SELECT 
+                i.id,
+                i.claim_id,
+                c.claimant_name,
+                i.invoice_datetime,
+                i.info,
+                i.docs,
+                i.storage_bill,
+                i.rent_bill
+            FROM invoice i
+            LEFT JOIN claims c ON i.claim_id = c.claim_id
+            ORDER BY i.invoice_datetime DESC;
+        """
+        try:
+            with self.conn.cursor(cursor_factory=RealDictCursor) as cur:
+                cur.execute(query)
+                rows = cur.fetchall()
+                return rows
+        except Exception as e:
+            print(f"Error fetching all invoices: {e}")
+            return []        
         
+
     def get_invoices_by_claim_id(self, claim_id: str):
         query = """
-            SELECT id, claim_id, invoice_datetime, info
+            SELECT id, claim_id, invoice_datetime, info,
+            docs, storage_bill, rent_bill
             FROM invoice
             WHERE claim_id = %s
             ORDER BY invoice_datetime DESC;
@@ -754,33 +781,37 @@ class ClaimFormQueries:
             cur.execute(query)
             return cur.fetchall()
     # ---------------------- LONG CLAIMS ----------------------
-    def insert_long_claim(self, starting_date, ending_date):
+    def insert_long_claim(self, starting_date, ending_date, hirer_name=None):
         try:
-            query = "INSERT INTO long_claims (starting_date, ending_date) VALUES (%s, %s) RETURNING id;"
+            query = """
+                INSERT INTO long_claims (starting_date, ending_date, hirer_name)
+                VALUES (%s, %s, %s)
+                RETURNING id;
+            """
             with self.conn.cursor() as cur:
-                cur.execute(query, (starting_date, ending_date))
+                cur.execute(query, (starting_date, ending_date, hirer_name))
                 long_claim_id = cur.fetchone()[0]
                 self.conn.commit()
             return long_claim_id
         except Exception as e:
             self.conn.rollback()
             raise e
-        
-    def update_long_claim(self, long_claim_id, starting_date, ending_date):
+
+    def update_long_claim(self, long_claim_id, starting_date, ending_date, hirer_name=None):
         try:
             query = """
                 UPDATE long_claims
                 SET starting_date = %s,
-                    ending_date = %s
+                    ending_date = %s,
+                    hirer_name = %s
                 WHERE id = %s;
             """
             with self.conn.cursor() as cur:
-                cur.execute(query, (starting_date, ending_date, long_claim_id))
+                cur.execute(query, (starting_date, ending_date, hirer_name, long_claim_id))
                 self.conn.commit()
         except Exception as e:
             self.conn.rollback()
             raise e
-
     def add_car_to_long_claim(self, long_claim_id: str, car_id: int):
         try:
             query = "INSERT INTO long_claim_cars (long_claim_id, car_id) VALUES (%s, %s);"
@@ -933,7 +964,8 @@ class ClaimFormQueries:
                 starting_date,
                 ending_date,
                 invoice_sent,
-                date_sent
+                date_sent,
+                hirer_name
                 
             FROM long_claims
             WHERE recently_deleted = FALSE
@@ -972,7 +1004,8 @@ class ClaimFormQueries:
                 id,
                 starting_date,
                 ending_date,
-                invoice_sent
+                invoice_sent,
+                hirer_name
             FROM long_claims
             WHERE id = %s
         """
@@ -998,18 +1031,18 @@ class ClaimFormQueries:
             self.conn.rollback()
             raise e
 
-    def mark_as_recently_deleted(self, claim_id: str):
+    def mark_as_recently_deleted(self, claim_id: str, deleted_by: str):
         query = """
             UPDATE long_claims
             SET recently_deleted = TRUE,
-                recently_deleted_date = NOW()
+                recently_deleted_date = NOW(),
+                deleted_by = %s
             WHERE id = %s
         """
         with self.conn.cursor() as cur:
-            cur.execute(query, (claim_id,))
+            cur.execute(query, (deleted_by, claim_id))
             self.conn.commit()
-            return cur.rowcount
-        
+            return cur.rowcount    
     def delete_long_claim(self, claim_id: str):
         query = "DELETE FROM long_claims WHERE id = %s"
         with self.conn.cursor() as cur:
@@ -1037,7 +1070,9 @@ class ClaimFormQueries:
                 starting_date,
                 ending_date,
                 invoice_sent,
-                date_sent
+                date_sent,
+                hirer_name,
+                deleted_by
             FROM long_claims
             WHERE recently_deleted = TRUE
             ORDER BY id DESC
@@ -1183,3 +1218,134 @@ class ClaimFormQueries:
         except Exception as e:
             self.conn.rollback()
             raise e
+        
+
+    def close_claim(self, claim_id: str, closed_by: str) -> bool:
+        query = """
+            UPDATE claims
+            SET closed_by = %s,
+                closed_date = NOW()
+            WHERE claim_id = %s;
+        """
+        try:
+            with self.conn.cursor() as cur:
+                cur.execute(query, (closed_by, claim_id))
+                if cur.rowcount == 0:
+                    return False
+                self.conn.commit()
+            return True
+        except Exception as e:
+            print(f"Error in close_claim: {e}")
+            self.conn.rollback()
+            return False
+        
+
+
+    def update_claim_status(self, claim_id: str, status: str) -> bool:
+        query = """
+            UPDATE claims
+            SET status = %s
+            WHERE claim_id = %s;
+        """
+        with self.conn.cursor() as cur:
+            cur.execute(query, (status, claim_id))
+            if cur.rowcount == 0:
+                return False  # claim_id not found
+            self.conn.commit()
+        return True
+
+
+    def get_rental_by_claim(self, claim_id: str) -> dict | None:
+        query = """
+            SELECT total_cost
+            FROM rental_agreements
+            WHERE claim_id = %s
+        """
+        with self.conn.cursor() as cur:
+            cur.execute(query, (claim_id,))
+            row = cur.fetchone()
+            if not row:
+                return None
+            (total_cost,) = row
+            return total_cost
+
+    def get_storage_by_claim(self, claim_id: str) -> dict | None:
+        query = """
+            SELECT invoice_total
+            FROM storage_forms
+            WHERE claim_id = %s
+        """
+        with self.conn.cursor() as cur:
+            cur.execute(query, (claim_id,))
+            row = cur.fetchone()
+            if not row:
+                return None
+            (invoice_total,) = row
+            return invoice_total
+        
+
+    def insert_long_hire_invoice(self, claim_id: str, amount: float) -> int:
+        query = """
+            INSERT INTO long_hire_invoices (claim_id, amount, date_sent)
+            VALUES (%s, %s, CURRENT_DATE)
+            RETURNING id;
+        """
+        try:
+            with self.conn.cursor() as cur:
+                cur.execute(query, (claim_id, amount))
+                invoice_id = cur.fetchone()[0]
+                self.conn.commit()
+                return invoice_id
+        except Exception as e:
+            print(f"Error inserting long hire invoice: {e}")
+            self.conn.rollback()
+            return 0
+
+    def get_all_long_hire_invoices(self) -> List[Dict[str, Any]]:
+        query = """
+            SELECT 
+                lhi.id,
+                lhi.claim_id,
+                lc.hirer_name,
+                lhi.amount,
+                lhi.date_sent
+            FROM long_hire_invoices lhi
+            LEFT JOIN long_claims lc ON lhi.claim_id = lc.id
+            ORDER BY lhi.date_sent DESC;
+        """
+        try:
+            with self.conn.cursor(cursor_factory=RealDictCursor) as cur:
+                cur.execute(query)
+                rows = cur.fetchall()
+                return rows
+        except Exception as e:
+            print(f"Error fetching long hire invoices: {e}")
+            return []
+
+
+    def update_daily_rate(self, long_claim_id: str, car_id: int, daily_rate: float) -> bool:
+        query = """
+            UPDATE long_claim_cars
+            SET daily_rate = %s
+            WHERE long_claim_id = %s
+            AND car_id = %s
+        """
+        with self.conn.cursor() as cur:
+            cur.execute(query, (daily_rate, long_claim_id, car_id))
+            self.conn.commit()
+            return cur.rowcount > 0
+
+
+
+    def get_daily_rate(self, long_claim_id: str, car_id: int):
+        query = """
+            SELECT daily_rate
+            FROM long_claim_cars
+            WHERE long_claim_id = %s
+            AND car_id = %s
+        """
+        with self.conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute(query, (long_claim_id, car_id))
+            return cur.fetchone()
+
+    

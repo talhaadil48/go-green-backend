@@ -534,7 +534,7 @@ async def upsert_hire_checklist(request: Request) -> Dict[str, Any]:
     if not result:
         raise HTTPException(status_code=500, detail="Failed to save hire checklist")
 
-    # ─── Response — includes all columns that exist in your table ─────
+    # ─── Response  includes all columns that exist in your table ─────
     response = {
         "inspection_id":           result["inspection_id"],
         "long_claim_id":           result["long_claim_id"],

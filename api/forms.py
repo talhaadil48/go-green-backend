@@ -16,11 +16,18 @@ security = HTTPBearer(
     scheme_name="Bearer",
     description="JWT Authorization header using the Bearer scheme"
 )
+class DailyRateUpdate(BaseModel):
+    car_id: int
+    daily_rate: float
 
 
 class InvoiceCreate(BaseModel):
     claim_id: str
     info: str
+    docs: Optional[List[str]] = []
+    storage_bill: Optional[float] = 0
+    rent_bill: Optional[float] = 0
+
 class ChangePasswordRequest(BaseModel):
     username: str
     new_password: str
@@ -37,11 +44,13 @@ class CurrentUser(BaseModel):
 class LongClaimCreate(BaseModel):
     starting_date: Optional[str] = None
     ending_date: Optional[str] = None
+    hirer_name : Optional[str] = None
 
 class LongClaimUpdate(BaseModel):
     long_claim_id: str
     starting_date: Optional[str] = None
     ending_date: Optional[str] = None
+    hirer_name: Optional[str] = None
 
 class LongClaimCarAction(BaseModel):
     car_id: int
@@ -74,6 +83,21 @@ class ClaimantUpdate(BaseModel):
     name: Optional[str] = None
     location: Optional[str] = None
     delivery_charges: Optional[float] = None
+
+class SoftDeleteClaimRequest(BaseModel):
+    deleted_by: str
+
+class CloseClaimRequest(BaseModel):
+    closed_by: str
+
+class LongHireInvoiceCreate(BaseModel):
+    claim_id: str
+    amount: float
+
+
+
+
+
 def get_current_user(
     credentials: HTTPAuthorizationCredentials = Depends(security)
 ) -> CurrentUser:
@@ -582,11 +606,11 @@ async def delete_user(
     }
     
 @router.put("/claims/{claim_id}/soft-delete")
-async def soft_delete_claim(claim_id: str):
+async def soft_delete_claim(claim_id: str, request: SoftDeleteClaimRequest):
     conn = DBConnection.get_connection()
     queries = Queries(conn)
 
-    deleted = queries.soft_delete_claim(claim_id)
+    deleted = queries.soft_delete_claim(claim_id, request.deleted_by)
 
     if not deleted:
         raise HTTPException(
@@ -596,8 +620,31 @@ async def soft_delete_claim(claim_id: str):
 
     return {
         "message": "Claim soft deleted successfully",
-        "claim_id": claim_id
+        "claim_id": claim_id,
+        "deleted_by": request.deleted_by
     }
+
+
+
+@router.put("/claims/{claim_id}/close")
+async def close_claim(claim_id: str, request: CloseClaimRequest):
+    conn = DBConnection.get_connection()
+    queries = Queries(conn)
+
+    closed = queries.close_claim(claim_id, request.closed_by)
+
+    if not closed:
+        raise HTTPException(
+            status_code=404,
+            detail="Claim not found"
+        )
+
+    return {
+        "message": "Claim closed successfully",
+        "claim_id": claim_id,
+        "closed_by": request.closed_by
+    }
+
 
 
 @router.get("/users")
@@ -617,24 +664,6 @@ async def get_all_users(
 
     return {
         "users": users
-    }
-
-@router.put("/claims/{claim_id}/restore")
-async def restore_claim(claim_id: str):
-    conn = DBConnection.get_connection()
-    queries = Queries(conn)
-
-    restored = queries.restore_claim(claim_id)
-
-    if not restored:
-        raise HTTPException(
-            status_code=404,
-            detail="Claim not found"
-        )
-
-    return {
-        "message": "Claim restored successfully",
-        "claim_id": claim_id
     }
     
     
@@ -702,13 +731,18 @@ async def get_pre_inspection_form_by_inspection_id(
 
     return response
 
-
 @router.post("/invoice")
 async def create_invoice(data: InvoiceCreate):
     conn = DBConnection.get_connection()
     queries = Queries(conn)
 
-    invoice_id = queries.insert_invoice(data.claim_id, data.info)
+    invoice_id = queries.insert_invoice(
+        data.claim_id,
+        data.info,
+        data.docs,
+        data.storage_bill,
+        data.rent_bill
+    )
 
     if invoice_id == 0:
         return {"success": False, "message": "Failed to create invoice"}
@@ -717,7 +751,21 @@ async def create_invoice(data: InvoiceCreate):
         "success": True,
         "invoice_id": invoice_id
     }
-    
+
+@router.get("/invoice")
+async def get_all_invoices():
+    conn = DBConnection.get_connection()
+    queries = Queries(conn)
+
+    invoices = queries.get_all_invoices()
+
+    return {
+        "success": True,
+        "count": len(invoices),
+        "data": invoices
+    }
+
+
 @router.get("/invoice/{claim_id}")
 async def get_invoices(claim_id: str):
     conn = DBConnection.get_connection()
@@ -853,7 +901,8 @@ async def create_long_claim(payload: LongClaimCreate):
 
     long_claim_id = queries.insert_long_claim(
         payload.starting_date,
-        payload.ending_date
+        payload.ending_date,
+        payload.hirer_name
     )
 
     return {
@@ -874,7 +923,8 @@ async def update_long_claim(payload: LongClaimUpdate):
     queries.update_long_claim(
         payload.long_claim_id,
         payload.starting_date,
-        payload.ending_date
+        payload.ending_date,
+        payload.hirer_name
     )
 
     return {
@@ -1089,16 +1139,24 @@ async def delete_long_claim(claim_id: str):
         return {"success": False, "message": "Claim not found"}
     return {"success": True, "message": f"Claim {claim_id} deleted permanently."}
 
-
 @router.patch("/long-claims/{claim_id}/mark-deleted")
-async def mark_recently_deleted(claim_id: str):
+async def mark_recently_deleted(claim_id: str, payload: Dict[str, str]):
+    deleted_by = payload.get("deleted_by")
+    if not deleted_by:
+        raise HTTPException(status_code=400, detail="deleted_by is required")
+
     conn = DBConnection.get_connection()
     queries = Queries(conn)
-    updated = queries.mark_as_recently_deleted(claim_id)
-    if updated == 0:
-        return {"success": False, "message": "Claim not found"}
-    return {"success": True, "message": f"Claim {claim_id} marked as recently deleted."}
-
+    
+    try:
+        updated = queries.mark_as_recently_deleted(claim_id, deleted_by)
+        if updated == 0:
+            raise HTTPException(status_code=404, detail="Claim not found")
+    except Exception as e:
+        conn.rollback()
+        raise HTTPException(status_code=500, detail=str(e))
+    
+    return {"success": True, "message": f"Claim {claim_id} marked as recently deleted by {deleted_by}."}
 
 
 @router.get("/long/soft-deleted")
@@ -1172,3 +1230,117 @@ async def get_hire_checklists(
         response_list.append(item)
 
     return response_list
+
+
+@router.put("/claims/{claim_id}/restore")
+async def restore_claim(claim_id: str):
+    conn = DBConnection.get_connection()
+    queries = Queries(conn)
+
+    restored = queries.restore_short_claim(claim_id)
+
+    if not restored:
+        raise HTTPException(
+            status_code=409,
+            detail="Claim not found"
+        )
+
+    return {
+        "message": "Claim restored successfully",
+        "claim_id": claim_id
+    }
+
+
+
+@router.put("/claims/{claim_id}/status")
+async def update_claim_status_api(claim_id: str, payload: Dict[str, str]):
+    conn = DBConnection.get_connection()
+    queries = Queries(conn)
+
+    status = payload.get("status")
+    if not status:
+        raise HTTPException(status_code=400, detail="status is required")
+
+    try:
+        updated = queries.update_claim_status(claim_id, status)
+        if not updated:
+            raise HTTPException(status_code=404, detail="claim_id not found")
+    except Exception as e:
+        conn.rollback()
+        raise HTTPException(status_code=500, detail=str(e))
+
+    return {"message": "Status updated successfully", "claim_id": claim_id, "status": status}
+
+
+
+@router.get("/claim-bill/{claim_id}")
+async def get_claim_bill(claim_id: str) -> Dict[str, Any]:
+    conn = DBConnection.get_connection()
+    queries = Queries(conn)
+
+    rental = queries.get_rental_by_claim(claim_id)
+    storage = queries.get_storage_by_claim(claim_id)
+
+    return {
+        "rental": rental,
+        "storage": storage
+    }
+
+
+
+@router.post("/long_hire_invoice")
+async def create_long_hire_invoice(data: LongHireInvoiceCreate):
+    conn = DBConnection.get_connection()
+    queries = Queries(conn)
+
+    invoice_id = queries.insert_long_hire_invoice(
+        data.claim_id,
+        data.amount
+    )
+
+    if invoice_id == 0:
+        return {"success": False, "message": "Failed to create invoice"}
+
+    return {"success": True, "invoice_id": invoice_id}
+
+
+@router.get("/long_hire_invoice")
+async def get_all_long_hire_invoices():
+    conn = DBConnection.get_connection()
+    queries = Queries(conn)
+
+    invoices = queries.get_all_long_hire_invoices()
+
+    return {
+        "success": True,
+        "count": len(invoices),
+        "data": invoices
+    }
+
+@router.get("/long-claim/{long_claim_id}/car/{car_id}/daily-rate")
+async def get_daily_rate(long_claim_id: str, car_id: int):
+    conn = DBConnection.get_connection()
+    queries = Queries(conn)
+
+    data = queries.get_daily_rate(long_claim_id, car_id)
+    return {
+        "success": True,
+        "data": data
+    }
+
+
+
+@router.put("/long-claim/{long_claim_id}/daily-rate")
+async def update_daily_rate(long_claim_id: str, body: DailyRateUpdate):
+    conn = DBConnection.get_connection()
+    queries = Queries(conn)
+
+    updated = queries.update_daily_rate(
+        long_claim_id,
+        body.car_id,
+        body.daily_rate
+    )
+
+    return {
+        "success": updated
+    }
