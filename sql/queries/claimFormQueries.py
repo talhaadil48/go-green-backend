@@ -977,14 +977,14 @@ class ClaimFormQueries:
         
 
 
-    def get_claimants_by_car(self, car_id):
+    def get_claimants_by_car(self, car_id,claim_id):
         query = """
             SELECT *
             FROM claimant
-            WHERE car_id = %s
+            WHERE car_id = %s AND long_claim_id = %s
         """
         with self.conn.cursor(cursor_factory=RealDictCursor) as cur:
-            cur.execute(query, (car_id,))
+            cur.execute(query, (car_id, claim_id))
             return cur.fetchall()
         
     def get_cars_by_long_claim(self, long_claim_id):

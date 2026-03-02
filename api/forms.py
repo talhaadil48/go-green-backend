@@ -1076,12 +1076,12 @@ async def get_cars_for_long_claim(long_claim_id: str):
         "data": data
     }
 
-@router.get("/car/{car_id}/claimants")
-async def get_claimants_for_car(car_id: int):
+@router.get("/car/{car_id}/claimants/{claim_id}")
+async def get_claimants_for_car(car_id: int, claim_id: str):
     conn = DBConnection.get_connection()
     queries = Queries(conn)
 
-    data = queries.get_claimants_by_car(car_id)
+    data = queries.get_claimants_by_car(car_id, claim_id)
 
     return {
         "success": True,
