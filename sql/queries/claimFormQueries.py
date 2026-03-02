@@ -986,7 +986,17 @@ class ClaimFormQueries:
         with self.conn.cursor(cursor_factory=RealDictCursor) as cur:
             cur.execute(query, (car_id, claim_id))
             return cur.fetchall()
-        
+
+    def get_claimants_for_claim(self, long_claim_id: str):
+        query = """
+            SELECT *
+            FROM claimant
+            WHERE long_claim_id = %s
+        """
+        with self.conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute(query, (long_claim_id,))
+            data = cur.fetchall()  # fetch results while cursor is still open
+            return data
     def get_cars_by_long_claim(self, long_claim_id):
         query = """
             SELECT c.*
@@ -1285,22 +1295,30 @@ class ClaimFormQueries:
         
 
     def insert_long_hire_invoice(self, claim_id: str, amount: float) -> int:
-        query = """
+        insert_query = """
             INSERT INTO long_hire_invoices (claim_id, amount, date_sent)
             VALUES (%s, %s, CURRENT_DATE)
             RETURNING id;
         """
+        update_claim_query = """
+            UPDATE long_claims
+            SET invoice_sent = TRUE,
+                date_sent = CURRENT_DATE
+            WHERE id = %s;
+        """
         try:
             with self.conn.cursor() as cur:
-                cur.execute(query, (claim_id, amount))
+                cur.execute(insert_query, (claim_id, amount))
                 invoice_id = cur.fetchone()[0]
+
+                cur.execute(update_claim_query, (claim_id,))
+                
                 self.conn.commit()
                 return invoice_id
         except Exception as e:
-            print(f"Error inserting long hire invoice: {e}")
+            print(f"Error inserting long hire invoice and updating claim: {e}")
             self.conn.rollback()
             return 0
-
     def get_all_long_hire_invoices(self) -> List[Dict[str, Any]]:
         query = """
             SELECT 
@@ -1337,15 +1355,14 @@ class ClaimFormQueries:
 
 
 
-    def get_daily_rate(self, long_claim_id: str, car_id: int):
+    def get_daily_rates_for_claim(self, long_claim_id: str):
         query = """
-            SELECT daily_rate
+            SELECT car_id, daily_rate
             FROM long_claim_cars
             WHERE long_claim_id = %s
-            AND car_id = %s
         """
         with self.conn.cursor(cursor_factory=RealDictCursor) as cur:
-            cur.execute(query, (long_claim_id, car_id))
-            return cur.fetchone()
+            cur.execute(query, (long_claim_id,))
+            return cur.fetchall()  # returns a list of {car_id, daily_rate}
 
-    
+        

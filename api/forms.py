@@ -1089,6 +1089,26 @@ async def get_claimants_for_car(car_id: int, claim_id: str):
         "data": data
     }
 
+@router.get("/long-hire/{long_claim_id}/claimants")
+async def get_claimants_for_claim(long_claim_id: str):
+    conn = DBConnection.get_connection()
+    queries = Queries(conn)
+
+    data = queries.get_claimants_for_claim(long_claim_id)
+
+    # Optionally, group claimants by car_id for easier frontend use
+    claimants_by_car = {}
+    for claimant in data:
+        car_id = claimant['car_id']
+        if car_id not in claimants_by_car:
+            claimants_by_car[car_id] = []
+        claimants_by_car[car_id].append(claimant)
+
+    return {
+        "success": True,
+        "count": len(data),
+        "data": claimants_by_car
+    }
 
 @router.get("/long-claims/{claim_id}")
 async def get_long_claim_by_id(claim_id: str):
@@ -1317,17 +1337,20 @@ async def get_all_long_hire_invoices():
         "data": invoices
     }
 
-@router.get("/long-claim/{long_claim_id}/car/{car_id}/daily-rate")
-async def get_daily_rate(long_claim_id: str, car_id: int):
+@router.get("/long-claim/{long_claim_id}/daily-rates")
+async def get_daily_rates(long_claim_id: str):
     conn = DBConnection.get_connection()
     queries = Queries(conn)
 
-    data = queries.get_daily_rate(long_claim_id, car_id)
+    data = queries.get_daily_rates_for_claim(long_claim_id)
+
+    # convert list to dict {car_id: daily_rate} for easier use in frontend
+    rates = {item['car_id']: item['daily_rate'] or 0 for item in data}
+
     return {
         "success": True,
-        "data": data
+        "data": rates
     }
-
 
 
 @router.put("/long-claim/{long_claim_id}/daily-rate")
