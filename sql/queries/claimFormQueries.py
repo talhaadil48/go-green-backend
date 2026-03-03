@@ -1364,5 +1364,25 @@ class ClaimFormQueries:
         with self.conn.cursor(cursor_factory=RealDictCursor) as cur:
             cur.execute(query, (long_claim_id,))
             return cur.fetchall()  # returns a list of {car_id, daily_rate}
-
         
+    def upsert_accident_claim_column(self, claim_id: str, column: str, value: str) -> dict | None:
+        if column not in ["direction_before_drawing", "direction_after_drawing"]:
+            return None
+
+        with self.conn.cursor(cursor_factory=RealDictCursor) as cur:
+            query = f"""
+                INSERT INTO accident_claims (claim_id, {column})
+                VALUES (%s, %s)
+                ON CONFLICT (claim_id)
+                DO UPDATE SET {column} = EXCLUDED.{column}
+                RETURNING *;
+            """
+            cur.execute(query, (claim_id, value))
+            self.conn.commit()
+            result = cur.fetchone()
+            return result
+
+                
+
+
+    

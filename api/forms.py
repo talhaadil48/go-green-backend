@@ -1367,3 +1367,49 @@ async def update_daily_rate(long_claim_id: str, body: DailyRateUpdate):
     return {
         "success": updated
     }
+
+
+
+
+
+@router.put("/accident-claims/{claim_id}/direction")
+async def update_drawing_direction(
+    claim_id: str,
+    request: Request
+) -> Dict[str, Any]:
+    """
+    Update direction_before_drawing OR direction_after_drawing
+    Body:
+    {
+        "type": "before" | "after",
+        "value": "link of the image to be stored in the respective column"
+    }
+    """
+    try:
+        data = await request.json()
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid JSON")
+
+    direction_type = data.get("type")
+    value = data.get("value")
+    typeOfDrawing = "direction_before_drawing" if direction_type == "before" else "direction_after_drawing"
+
+    if direction_type not in ["before", "after"]:
+        raise HTTPException(status_code=400, detail="type must be 'before' or 'after'")
+
+    if value is None:
+        raise HTTPException(status_code=400, detail="value is required")
+
+  
+
+    conn = DBConnection.get_connection()
+    queries = Queries(conn)
+
+    result = queries.upsert_accident_claim_column(claim_id, typeOfDrawing, value)
+
+    print(result)
+    return {
+        "claim_id": claim_id,
+        "updated_column": typeOfDrawing,
+        "value": value
+    }
