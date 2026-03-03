@@ -1365,24 +1365,25 @@ class ClaimFormQueries:
             cur.execute(query, (long_claim_id,))
             return cur.fetchall()  # returns a list of {car_id, daily_rate}
         
-    def upsert_accident_claim_column(self, claim_id: str, column: str, value: str) -> dict | None:
-        if column not in ["direction_before_drawing", "direction_after_drawing"]:
+    def upsert_accident_claim_with_json(
+    self, claim_id: str, value_column: str, value: str, json_column: str, json_data: dict | None
+) -> dict | None:
+        if value_column not in ["direction_before_drawing", "direction_after_drawing"]:
+            return None
+        if json_column not in ["json_before", "json_after"]:
             return None
 
         with self.conn.cursor(cursor_factory=RealDictCursor) as cur:
             query = f"""
-                INSERT INTO accident_claims (claim_id, {column})
-                VALUES (%s, %s)
+                INSERT INTO accident_claims (claim_id, {value_column}, {json_column})
+                VALUES (%s, %s, %s)
                 ON CONFLICT (claim_id)
-                DO UPDATE SET {column} = EXCLUDED.{column}
+                DO UPDATE SET
+                    {value_column} = EXCLUDED.{value_column},
+                    {json_column} = EXCLUDED.{json_column}
                 RETURNING *;
             """
-            cur.execute(query, (claim_id, value))
+            cur.execute(query, (claim_id, value, json_data))
+            print(f"Executed upsert_accident_claim_with_json for claim_id={claim_id}, value_column={value_column}, json_column={json_column}")
             self.conn.commit()
-            result = cur.fetchone()
-            return result
-
-                
-
-
-    
+            return cur.fetchone()

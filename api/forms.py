@@ -214,6 +214,8 @@ async def get_accident_claim(claim_id: str) -> Dict[str, Any]:
         "circumstance_drawing": result.get("circumstance_drawing"),
         "direction_before_drawing": result.get("direction_before_drawing"),
         "direction_after_drawing": result.get("direction_after_drawing"),
+        "json_before": result.get("json_before"),
+        "json_after": result.get("json_after")
     }
 
 
@@ -1370,19 +1372,18 @@ async def update_daily_rate(long_claim_id: str, body: DailyRateUpdate):
 
 
 
-
-
 @router.put("/accident-claims/{claim_id}/direction")
 async def update_drawing_direction(
     claim_id: str,
     request: Request
 ) -> Dict[str, Any]:
     """
-    Update direction_before_drawing OR direction_after_drawing
+    Update value and JSON column for an accident claim.
     Body:
     {
         "type": "before" | "after",
-        "value": "link of the image to be stored in the respective column"
+        "value": "link or string value",
+        "json_data": { ... }  # optional JSON object
     }
     """
     try:
@@ -1392,24 +1393,24 @@ async def update_drawing_direction(
 
     direction_type = data.get("type")
     value = data.get("value")
-    typeOfDrawing = "direction_before_drawing" if direction_type == "before" else "direction_after_drawing"
+    json_data = data.get("json_data")  # optional JSON
 
     if direction_type not in ["before", "after"]:
         raise HTTPException(status_code=400, detail="type must be 'before' or 'after'")
-
     if value is None:
         raise HTTPException(status_code=400, detail="value is required")
 
-  
+    value_column = "direction_before_drawing" if direction_type == "before" else "direction_after_drawing"
+    json_column = "json_before" if direction_type == "before" else "json_after"
 
     conn = DBConnection.get_connection()
     queries = Queries(conn)
+    result = queries.upsert_accident_claim_with_json(
+        claim_id, value_column, value, json_column, json_data
+    )
 
-    result = queries.upsert_accident_claim_column(claim_id, typeOfDrawing, value)
-
-    print(result)
     return {
         "claim_id": claim_id,
-        "updated_column": typeOfDrawing,
-        "value": value
-    }
+        "updated_value_column": value_column,
+        "value": value,
+            }
