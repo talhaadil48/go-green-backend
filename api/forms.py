@@ -95,6 +95,10 @@ class LongHireInvoiceCreate(BaseModel):
     amount: float
 
 
+class InvoiceUpdate(BaseModel):
+    info: str | None = None
+    storage_bill: float | None = None
+    rent_bill: float | None = None
 
 
 
@@ -649,6 +653,24 @@ async def close_claim(claim_id: str, request: CloseClaimRequest):
 
 
 
+@router.put("/claims/{claim_id}/reopen")
+async def reopen_claim(claim_id: str):
+    conn = DBConnection.get_connection()
+    queries = Queries(conn)
+
+    reopened = queries.reopen_claim(claim_id)
+
+    if not reopened:
+        raise HTTPException(
+            status_code=404,
+            detail="Claim not found"
+        )
+
+    return {
+        "message": "Claim reopened successfully",
+        "claim_id": claim_id
+    }
+
 @router.get("/users")
 async def get_all_users(
     current_user: CurrentUser = Depends(get_current_user),
@@ -752,6 +774,29 @@ async def create_invoice(data: InvoiceCreate):
     return {
         "success": True,
         "invoice_id": invoice_id
+    }
+
+@router.put("/invoice/{invoice_id}")
+async def update_invoice(invoice_id: int, data: InvoiceUpdate):
+    conn = DBConnection.get_connection()
+    queries = Queries(conn)
+
+    updated_id = queries.update_invoice(
+        invoice_id,
+        data.info,
+        data.storage_bill,
+        data.rent_bill
+    )
+
+    if updated_id == 0:
+        return {
+            "success": False,
+            "message": "Nothing updated or invoice not found"
+        }
+
+    return {
+        "success": True,
+        "invoice_id": updated_id
     }
 
 @router.get("/invoice")
@@ -890,6 +935,21 @@ async def get_all_cars():
         "count": len(cars),
         "data": cars
     }
+
+
+@router.get("/cars/available")
+async def get_available_cars():
+    conn = DBConnection.get_connection()
+    queries = Queries(conn)
+
+    cars = queries.get_available_cars()
+
+    return {
+        "success": True,
+        "count": len(cars),
+        "data": cars
+    }
+
 
 # ---------------------- LONG CLAIMS ----------------------
 @router.post("/long-claim")

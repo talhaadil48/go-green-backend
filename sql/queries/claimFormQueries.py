@@ -678,6 +678,57 @@ class ClaimFormQueries:
             self.conn.rollback()
             return 0
 
+    def update_invoice(
+    self,
+    invoice_id: int,
+    info=None,
+    storage_bill=None,
+    rent_bill=None
+):
+
+        fields = []
+        values = []
+
+        if info is not None:
+            fields.append("info = %s")
+            values.append(info)
+
+        if storage_bill is not None:
+            fields.append("storage_bill = %s")
+            values.append(storage_bill)
+
+        if rent_bill is not None:
+            fields.append("rent_bill = %s")
+            values.append(rent_bill)
+
+        if not fields:
+            return 0
+
+        query = f"""
+            UPDATE invoice
+            SET {", ".join(fields)}
+            WHERE id = %s
+            RETURNING id;
+        """
+
+        values.append(invoice_id)
+
+        try:
+            with self.conn.cursor() as cur:
+                cur.execute(query, values)
+                result = cur.fetchone()
+
+                if result is None:
+                    return 0
+
+                self.conn.commit()
+                return result[0]
+
+        except Exception as e:
+            print(f"Error updating invoice: {e}")
+            self.conn.rollback()
+            return 0
+
 
     def get_all_invoices(self):
         query = """
@@ -780,7 +831,21 @@ class ClaimFormQueries:
         with self.conn.cursor(cursor_factory=RealDictCursor) as cur:
             cur.execute(query)
             return cur.fetchall()
-    # ---------------------- LONG CLAIMS ----------------------
+        
+    def get_available_cars(self):
+        query = """
+            SELECT *
+            FROM cars
+            WHERE id NOT IN (
+                SELECT car_id
+                FROM claimant
+                WHERE end_date IS NULL
+            )
+        """
+        with self.conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute(query)
+            return cur.fetchall()
+        # ---------------------- LONG CLAIMS ----------------------
     def insert_long_claim(self, starting_date, ending_date, hirer_name=None):
         try:
             query = """
@@ -1249,6 +1314,25 @@ class ClaimFormQueries:
             self.conn.rollback()
             return False
         
+    def reopen_claim(self, claim_id: str) -> bool:
+        query = """
+            UPDATE claims
+            SET closed_by = NULL,
+                closed_date = NULL
+            WHERE claim_id = %s;
+        """
+        try:
+            with self.conn.cursor() as cur:
+                cur.execute(query, (claim_id,))
+                if cur.rowcount == 0:
+                    return False
+                self.conn.commit()
+            return True
+        except Exception as e:
+            print(f"Error in reopen_claim: {e}")
+            self.conn.rollback()
+            return False
+            
 
 
     def update_claim_status(self, claim_id: str, status: str) -> bool:
