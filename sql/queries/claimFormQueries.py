@@ -354,23 +354,85 @@ class ClaimFormQueries:
             self.conn.commit()
             return cur.rowcount > 0  # True if any row was updated
 
-    def upsert_claim_documents(self, claim_id: str, documents: dict) -> None:
-        query = """
-        INSERT INTO claim_documents (claim_id, documents)
-        VALUES (%s, %s)
+    def upsert_rental_agreement(self, claim_id: str, data: dict) -> dict | None:
+        updatable_columns = [
+            "hirer_name", "title", "permanent_address",
+            "additional_driver_name", "licence_no",
+            "new_date_issued",
+            "new_expiry_date",
+            "new_dob",
+            "new_date_test_passed",
+            "new_licence_no",
+            "new_occupation",
+            "date_issued", "expiry_date", "dob", "date_test_passed", "occupation",
+            "daily_rate", "policy_excess", "deposit", "refuelling_charge",
+            "insurance_company", "policy_no", "insurance_dates",
+            "own_insurance_confirm", "insurance_date", "insurance_time",
+            "motoring_offence_3yrs", "disqualified_5yrs", "accident_3yrs",
+            "insurance_declined_5yrs", "dishonesty_conviction",
+            "medical_condition1", "medical_condition2", "medical_details",
+            "additional_driver_auth",
+            "hire_vehicle_reg", "hire_vehicle_make", "hire_vehicle_model", "hire_vehicle_group",
+            "hire_vehicle_date_out", "hire_vehicle_date_in",
+            "hire_vehicle_fuel_out", "hire_vehicle_fuel_in",
+            "change_vehicle_reg", "change_vehicle_make", "change_vehicle_model", "change_vehicle_group",
+            "change_vehicle_date_out", "change_vehicle_date_in",
+            "change_vehicle_fuel_out", "change_vehicle_fuel_in",
+            "admin_fee", "delivery_charge", "cdw_per_day",
+            "days_out", "days_in", "total_days",
+            "rate_per_day", "refuelling_total",
+            "subtotal", "vat", "total_cost",
+            "declaration_date", "liability_date",
+            "hirer_signature_terms", "company_signature",
+            "hirer_signature_insurance", "declaration_signature", "liability_signature"
+        ]
+
+        fields_to_update = [col for col in updatable_columns if col in data]
+
+        if not fields_to_update:
+            return None
+
+        set_clause = ", ".join(f"{col} = EXCLUDED.{col}" for col in fields_to_update)
+        columns = ["claim_id"] + fields_to_update
+        values_placeholders = ", ".join(f"%({col})s" for col in columns)
+
+        query = f"""
+        INSERT INTO rental_agreements ({', '.join(columns)})
+        VALUES ({values_placeholders})
         ON CONFLICT (claim_id)
-        DO UPDATE
-        SET documents = claim_documents.documents || EXCLUDED.documents;
+        DO UPDATE SET
+            {set_clause}
+        RETURNING *;
         """
+
+        params = {"claim_id": claim_id, **{k: data[k] for k in fields_to_update}}
 
         try:
             with self.conn.cursor() as cur:
-                cur.execute(query, (claim_id, json.dumps(documents)))
-                self.conn.commit()
-        except Exception as e:
-            print(f"Error in upsert_claim_documents: {e}")
-            self.conn.rollback()
+                cur.execute(query, params)
+                row = cur.fetchone()
 
+                if row:
+                    col_names = [desc[0] for desc in cur.description]
+                    result = dict(zip(col_names, row))
+
+                    hire_out = result.get("hire_vehicle_date_out")
+                    hire_in = result.get("hire_vehicle_date_in")
+
+                    if hire_out and hire_in:
+                        self.update_claim_status(claim_id, "hire end")
+                    elif hire_out:
+                        self.update_claim_status(claim_id, "hire start")
+
+                    self.conn.commit()
+                    return result
+
+            return None
+
+        except Exception as e:
+            print(f"Error in upsert_rental_agreement: {e}")
+            self.conn.rollback()
+            return None
     def delete_claim_document(self, claim_id: str, doc_name: str) -> bool:
         query = """
         UPDATE claim_documents
@@ -652,12 +714,13 @@ class ClaimFormQueries:
     info: str,
     docs: list,
     storage_bill: float,
-    rent_bill: float
+    rent_bill: float,
+    user_name: str
 ) -> int:
 
         query = """
-            INSERT INTO invoice (claim_id, info, docs, storage_bill, rent_bill)
-            VALUES (%s, %s, %s, %s, %s)
+            INSERT INTO invoice (claim_id, info, docs, storage_bill, rent_bill, user_name)
+            VALUES (%s, %s, %s, %s, %s, %s)
             RETURNING id;
         """
 
@@ -666,9 +729,10 @@ class ClaimFormQueries:
                 cur.execute(query, (
                     claim_id,
                     info,
-                    docs,          # psycopg2 automatically converts list → postgres array
+                    docs,
                     storage_bill,
-                    rent_bill
+                    rent_bill,
+                    user_name
                 ))
                 invoice_id = cur.fetchone()[0]
                 self.conn.commit()
@@ -677,13 +741,14 @@ class ClaimFormQueries:
             print(f"Error inserting invoice: {e}")
             self.conn.rollback()
             return 0
-
+        
     def update_invoice(
     self,
     invoice_id: int,
     info=None,
     storage_bill=None,
-    rent_bill=None
+    rent_bill=None,
+    user_name=None
 ):
 
         fields = []
@@ -700,6 +765,10 @@ class ClaimFormQueries:
         if rent_bill is not None:
             fields.append("rent_bill = %s")
             values.append(rent_bill)
+
+        if user_name is not None:
+            fields.append("user_name = %s")
+            values.append(user_name)
 
         if not fields:
             return 0
@@ -729,7 +798,6 @@ class ClaimFormQueries:
             self.conn.rollback()
             return 0
 
-
     def get_all_invoices(self):
         query = """
             SELECT 
@@ -740,7 +808,8 @@ class ClaimFormQueries:
                 i.info,
                 i.docs,
                 i.storage_bill,
-                i.rent_bill
+                i.rent_bill,
+                i.user_name
             FROM invoice i
             LEFT JOIN claims c ON i.claim_id = c.claim_id
             ORDER BY i.invoice_datetime DESC;
@@ -758,7 +827,7 @@ class ClaimFormQueries:
     def get_invoices_by_claim_id(self, claim_id: str):
         query = """
             SELECT id, claim_id, invoice_datetime, info,
-            docs, storage_bill, rent_bill
+            docs, storage_bill, rent_bill, user_name
             FROM invoice
             WHERE claim_id = %s
             ORDER BY invoice_datetime DESC;
@@ -1308,6 +1377,7 @@ class ClaimFormQueries:
                 if cur.rowcount == 0:
                     return False
                 self.conn.commit()
+                self.update_claim_status(claim_id, "close claim")
             return True
         except Exception as e:
             print(f"Error in close_claim: {e}")
@@ -1376,12 +1446,12 @@ class ClaimFormQueries:
                 return None
             (invoice_total,) = row
             return invoice_total
-        
 
-    def insert_long_hire_invoice(self, claim_id: str, amount: float) -> int:
+
+    def insert_long_hire_invoice(self, claim_id: str, amount: float, user_name: str) -> int:
         insert_query = """
-            INSERT INTO long_hire_invoices (claim_id, amount, date_sent)
-            VALUES (%s, %s, CURRENT_DATE)
+            INSERT INTO long_hire_invoices (claim_id, amount, date_sent, user_name)
+            VALUES (%s, %s, CURRENT_DATE, %s)
             RETURNING id;
         """
         update_claim_query = """
@@ -1392,7 +1462,7 @@ class ClaimFormQueries:
         """
         try:
             with self.conn.cursor() as cur:
-                cur.execute(insert_query, (claim_id, amount))
+                cur.execute(insert_query, (claim_id, amount, user_name))
                 invoice_id = cur.fetchone()[0]
 
                 cur.execute(update_claim_query, (claim_id,))
@@ -1403,6 +1473,8 @@ class ClaimFormQueries:
             print(f"Error inserting long hire invoice and updating claim: {e}")
             self.conn.rollback()
             return 0
+
+
     def get_all_long_hire_invoices(self) -> List[Dict[str, Any]]:
         query = """
             SELECT 
@@ -1410,7 +1482,8 @@ class ClaimFormQueries:
                 lhi.claim_id,
                 lc.hirer_name,
                 lhi.amount,
-                lhi.date_sent
+                lhi.date_sent,
+                lhi.user_name
             FROM long_hire_invoices lhi
             LEFT JOIN long_claims lc ON lhi.claim_id = lc.id
             ORDER BY lhi.date_sent DESC;

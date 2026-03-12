@@ -27,6 +27,7 @@ class InvoiceCreate(BaseModel):
     docs: Optional[List[str]] = []
     storage_bill: Optional[float] = 0
     rent_bill: Optional[float] = 0
+    user_name: str
 
 class ChangePasswordRequest(BaseModel):
     username: str
@@ -93,12 +94,14 @@ class CloseClaimRequest(BaseModel):
 class LongHireInvoiceCreate(BaseModel):
     claim_id: str
     amount: float
+    user_name: str
 
 
 class InvoiceUpdate(BaseModel):
     info: str | None = None
     storage_bill: float | None = None
     rent_bill: float | None = None
+    user_name: str | None = None
 
 
 
@@ -755,6 +758,8 @@ async def get_pre_inspection_form_by_inspection_id(
 
     return response
 
+
+
 @router.post("/invoice")
 async def create_invoice(data: InvoiceCreate):
     conn = DBConnection.get_connection()
@@ -765,7 +770,8 @@ async def create_invoice(data: InvoiceCreate):
         data.info,
         data.docs,
         data.storage_bill,
-        data.rent_bill
+        data.rent_bill,
+        data.user_name
     )
 
     if invoice_id == 0:
@@ -785,7 +791,8 @@ async def update_invoice(invoice_id: int, data: InvoiceUpdate):
         invoice_id,
         data.info,
         data.storage_bill,
-        data.rent_bill
+        data.rent_bill,
+        data.user_name
     )
 
     if updated_id == 0:
@@ -798,6 +805,7 @@ async def update_invoice(invoice_id: int, data: InvoiceUpdate):
         "success": True,
         "invoice_id": updated_id
     }
+
 
 @router.get("/invoice")
 async def get_all_invoices():
@@ -1368,8 +1376,6 @@ async def get_claim_bill(claim_id: str) -> Dict[str, Any]:
         "storage": storage
     }
 
-
-
 @router.post("/long_hire_invoice")
 async def create_long_hire_invoice(data: LongHireInvoiceCreate):
     conn = DBConnection.get_connection()
@@ -1377,15 +1383,14 @@ async def create_long_hire_invoice(data: LongHireInvoiceCreate):
 
     invoice_id = queries.insert_long_hire_invoice(
         data.claim_id,
-        data.amount
+        data.amount,
+        data.user_name
     )
 
     if invoice_id == 0:
         return {"success": False, "message": "Failed to create invoice"}
 
     return {"success": True, "invoice_id": invoice_id}
-
-
 @router.get("/long_hire_invoice")
 async def get_all_long_hire_invoices():
     conn = DBConnection.get_connection()
@@ -1398,6 +1403,8 @@ async def get_all_long_hire_invoices():
         "count": len(invoices),
         "data": invoices
     }
+
+
 
 @router.get("/long-claim/{long_claim_id}/daily-rates")
 async def get_daily_rates(long_claim_id: str):
