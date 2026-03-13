@@ -671,7 +671,8 @@ class ClaimFormQueries:
     rent_bill: float,
     user_name: str
 ) -> int:
-
+        if 'Rental Agreement' in docs:
+            self.update_claim_status(claim_id, "invoice sent")
         query = """
             INSERT INTO invoice (claim_id, info, docs, storage_bill, rent_bill, user_name)
             VALUES (%s, %s, %s, %s, %s, %s)
