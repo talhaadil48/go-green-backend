@@ -433,6 +433,28 @@ class ClaimFormQueries:
             print(f"Error in upsert_rental_agreement: {e}")
             self.conn.rollback()
             return None
+        
+
+
+
+    def upsert_claim_documents(self, claim_id: str, documents: dict) -> None:
+        query = """
+        INSERT INTO claim_documents (claim_id, documents)
+        VALUES (%s, %s)
+        ON CONFLICT (claim_id)
+        DO UPDATE
+        SET documents = claim_documents.documents || EXCLUDED.documents;
+        """
+
+        try:
+            with self.conn.cursor() as cur:
+                cur.execute(query, (claim_id, json.dumps(documents)))
+                self.conn.commit()
+        except Exception as e:
+            print(f"Error in upsert_claim_documents: {e}")
+            self.conn.rollback()
+
+
     def delete_claim_document(self, claim_id: str, doc_name: str) -> bool:
         query = """
         UPDATE claim_documents
