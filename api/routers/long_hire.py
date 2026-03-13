@@ -262,10 +262,7 @@ async def upsert_hire_checklist(request: Request, queries=Depends(get_db)) -> Di
             status_code=400,
             detail="long_claim_id is required and must be a non-empty string",
         )
-    if not isinstance(car_id, int):
-        raise HTTPException(status_code=400, detail="car_id must be an integer")
-    if not isinstance(claimant_id, int):
-        raise HTTPException(status_code=400, detail="claimant_id must be an integer")
+
 
     update_data = {
         k: v

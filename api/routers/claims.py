@@ -36,7 +36,7 @@ async def create_claim(payload: Dict[str, Any], queries=Depends(get_db)):
     if not all([claimant_name, claim_type]):
         raise HTTPException(
             status_code=400,
-            detail="claimant_name, claim_type and council are required",
+            detail="Claimant name and Claim type required",
         )
 
     try:

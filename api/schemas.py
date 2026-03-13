@@ -32,16 +32,16 @@ class CloseClaimRequest(BaseModel):
 
 class CarCreate(BaseModel):
     """Body for POST /api/car."""
-    model: str
-    name: str
-    reg_no: str
+    model: Optional[str] = None
+    name: Optional[str] = None
+    reg_no: Optional[str] = None
 
 
 class CarUpdate(BaseModel):
     """Body for PUT /api/car/{car_id}."""
-    model: str
-    name: str
-    reg_no: str
+    model: Optional[str] = None
+    name: Optional[str] = None
+    reg_no: Optional[str] = None
 
 
 # ─────────────────────────────────────────────────────────────────────────────
