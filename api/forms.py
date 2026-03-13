@@ -15,10 +15,11 @@ from fastapi import APIRouter, Depends
 from api.deps.auth import get_current_user
 from api.routers import claims, documents, forms_data, cars, invoices, long_hire, users
 
-# Top-level router – preserves the original /api prefix and JWT guard
+# Top-level router – preserves the original /api prefix and JWT guard.
+# NOTE: No tags here; each sub-router declares its own tag so that Swagger
+# shows routes under their domain group exactly once (no duplicates).
 router = APIRouter(
     prefix="/api",
-    tags=["claims"],
     dependencies=[Depends(get_current_user)],
 )
 

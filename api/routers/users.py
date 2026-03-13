@@ -5,22 +5,11 @@ All endpoints here require the caller to be an *admin* user.
 
 from fastapi import APIRouter, HTTPException, Depends, status
 
-from pydantic import BaseModel
 from api.deps import get_db, get_current_user, CurrentUser
+from api.schemas import RegisterUserRequest, ChangePasswordRequest
 from utils.hashing import hash_password
 
 router = APIRouter(tags=["users"])
-
-
-class RegisterUserRequest(BaseModel):
-    username: str
-    password: str
-    role: str
-
-
-class ChangePasswordRequest(BaseModel):
-    username: str
-    new_password: str
 
 
 def _require_admin(current_user: CurrentUser) -> None:

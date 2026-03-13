@@ -3,36 +3,10 @@
 from fastapi import APIRouter, Depends
 from typing import Any, List, Optional
 
-from pydantic import BaseModel
 from api.deps import get_db
+from api.schemas import InvoiceCreate, InvoiceUpdate, LongHireInvoiceCreate
 
 router = APIRouter(tags=["invoices"])
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Pydantic models
-# ─────────────────────────────────────────────────────────────────────────────
-
-class InvoiceCreate(BaseModel):
-    claim_id: str
-    info: Optional[str] = None
-    docs: Optional[List[Any]] = None
-    storage_bill: Optional[float] = None
-    rent_bill: Optional[float] = None
-    user_name: Optional[str] = None
-
-
-class InvoiceUpdate(BaseModel):
-    info: Optional[str] = None
-    storage_bill: Optional[float] = None
-    rent_bill: Optional[float] = None
-    user_name: Optional[str] = None
-
-
-class LongHireInvoiceCreate(BaseModel):
-    claim_id: str
-    amount: float
-    user_name: str
 
 
 # ─────────────────────────────────────────────────────────────────────────────

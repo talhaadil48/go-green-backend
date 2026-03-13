@@ -12,23 +12,9 @@ from typing import Dict, Any, List
 from psycopg2.errors import UniqueViolation
 
 from api.deps import get_db, get_current_user, CurrentUser
+from api.schemas import SoftDeleteClaimRequest, CloseClaimRequest
 
 router = APIRouter(tags=["claims"])
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Pydantic request models
-# ─────────────────────────────────────────────────────────────────────────────
-
-from pydantic import BaseModel  # noqa: E402
-
-
-class SoftDeleteClaimRequest(BaseModel):
-    deleted_by: str
-
-
-class CloseClaimRequest(BaseModel):
-    closed_by: str
 
 
 # ─────────────────────────────────────────────────────────────────────────────

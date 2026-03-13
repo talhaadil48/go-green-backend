@@ -11,56 +11,17 @@ from fastapi import APIRouter, HTTPException, Depends
 from typing import Dict, Any, List, Optional
 from fastapi import Request
 
-from pydantic import BaseModel
 from api.deps import get_db
+from api.schemas import (
+    LongClaimCreate,
+    LongClaimUpdate,
+    LongClaimCarAction,
+    ClaimantCreate,
+    ClaimantUpdate,
+    DailyRateUpdate,
+)
 
 router = APIRouter(tags=["long-hire"])
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-# Pydantic models
-# ─────────────────────────────────────────────────────────────────────────────
-
-class LongClaimCreate(BaseModel):
-    starting_date: Optional[str] = None
-    ending_date: Optional[str] = None
-    hirer_name: Optional[str] = None
-
-
-class LongClaimUpdate(BaseModel):
-    long_claim_id: str
-    starting_date: Optional[str] = None
-    ending_date: Optional[str] = None
-    hirer_name: Optional[str] = None
-
-
-class LongClaimCarAction(BaseModel):
-    car_id: int
-
-
-class ClaimantCreate(BaseModel):
-    long_claim_id: str
-    car_id: int
-    start_date: Optional[str] = None
-    end_date: Optional[str] = None
-    miles: Optional[float] = None
-    name: Optional[str] = None
-    location: Optional[str] = None
-    delivery_charges: Optional[float] = None
-
-
-class ClaimantUpdate(BaseModel):
-    start_date: Optional[str] = None
-    end_date: Optional[str] = None
-    miles: Optional[float] = None
-    name: Optional[str] = None
-    location: Optional[str] = None
-    delivery_charges: Optional[float] = None
-
-
-class DailyRateUpdate(BaseModel):
-    car_id: int
-    daily_rate: float
 
 
 # ─────────────────────────────────────────────────────────────────────────────

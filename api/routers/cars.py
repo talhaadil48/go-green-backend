@@ -3,22 +3,10 @@
 from fastapi import APIRouter, HTTPException, Depends
 from typing import Any
 
-from pydantic import BaseModel
 from api.deps import get_db
+from api.schemas import CarCreate, CarUpdate
 
 router = APIRouter(tags=["cars"])
-
-
-class CarCreate(BaseModel):
-    model: str
-    name: str
-    reg_no: str
-
-
-class CarUpdate(BaseModel):
-    model: str
-    name: str
-    reg_no: str
 
 
 @router.post("/car")
