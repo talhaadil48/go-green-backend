@@ -711,15 +711,6 @@ async def recently_deleted_claims():
 
 
 
-@router.post("/claims/mark-invoice-sent/{claim_id}")
-async def mark_invoice_sent(claim_id: str):
-    conn = DBConnection.get_connection()
-    queries = Queries(conn)
-    updated_claim = queries.mark_invoice_sent(claim_id)
-    if not updated_claim:
-        return {"message": "Claim not found", "claim_id": claim_id}
-    return {"message": "Invoice marked as Sent", "claim": updated_claim}
-
 
 @router.get("/pre-inspection-forms/inspection/{inspection_id}")
 async def get_pre_inspection_form_by_inspection_id(

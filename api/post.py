@@ -504,7 +504,6 @@ async def upsert_hire_checklist(request: Request) -> Dict[str, Any]:
     if not isinstance(claimant_id, int):
         raise HTTPException(status_code=400, detail="claimant_id must be an integer")
 
-    inspection_id = incoming_data.get("inspection_id")  # optional
 
     # Remove identifier fields from update payload
     update_data = {
@@ -515,21 +514,13 @@ async def upsert_hire_checklist(request: Request) -> Dict[str, Any]:
     conn = DBConnection.get_connection()   # ← your connection factory
     queries = Queries(conn)
 
-    if inspection_id:
-        result = queries.upsert_hire_checklist(
-            long_claim_id=long_claim_id,
-            car_id=car_id,
-            claimant_id=claimant_id,
-            data=update_data,
-            inspection_id=inspection_id
-        )
-    else:
-        result = queries.upsert_hire_checklist(
-            long_claim_id=long_claim_id,
-            car_id=car_id,
-            claimant_id=claimant_id,
-            data=update_data
-        )
+    
+    result = queries.upsert_hire_checklist(
+        long_claim_id=long_claim_id,
+        car_id=car_id,
+        claimant_id=claimant_id,
+        data=update_data
+    )
 
     if not result:
         raise HTTPException(status_code=500, detail="Failed to save hire checklist")

@@ -97,11 +97,7 @@ class ClaimFormQueries:
 
         fields_to_update = [col for col in updatable_columns if col in data]
 
-        if not fields_to_update:
-            if inspection_id:
-                return self.get_pre_inspection_form(inspection_id)
-            forms = self.get_pre_inspection_forms_by_claim(claim_id)
-            return forms[0] if forms else None
+      
 
         try:
             with self.conn.cursor() as cur:
@@ -1184,20 +1180,14 @@ class ClaimFormQueries:
             return cur.fetchall()
 
 
-
     def upsert_hire_checklist(
     self,
     long_claim_id: str,
     car_id: int,
     claimant_id: int,
-    data: dict,
-    inspection_id = None
+    data: dict
 ) -> dict | None:
-        """
-        Upsert logic for hire_checklist table.
-        • inspection_id provided → UPDATE that row
-        • no inspection_id     → INSERT new row
-        """
+
         updatable_columns = [
             "condition_1", "condition_2", "condition_3", "condition_4", "condition_5",
             "condition_6", "condition_7", "condition_8", "condition_9", "condition_10",
@@ -1214,73 +1204,47 @@ class ClaimFormQueries:
 
         fields_to_update = [col for col in updatable_columns if col in data]
 
-        # If caller sent no updatable fields → just return current record (if exists)
-        if not fields_to_update:
-            if inspection_id:
-                # You should implement get_hire_checklist(inspection_id) if you want this behaviour
-                return self.get_hire_checklist(inspection_id)  # ← placeholder
-            records = self.get_hire_checklists_by_claim(long_claim_id, car_id, claimant_id)
-            return records[0] if records else None
 
         try:
             with self.conn.cursor() as cur:
 
-                if inspection_id:
-                    # ─── UPSERT (INSERT or UPDATE on inspection_id) ───────────────
-                    columns = ["long_claim_id", "car_id", "claimant_id", "inspection_id"] + fields_to_update
-                    values_placeholders = ", ".join(f"%({col})s" for col in columns)
-                    set_clause = ", ".join(f"{col} = EXCLUDED.{col}" for col in fields_to_update)
+                columns = ["long_claim_id", "car_id", "claimant_id"] + fields_to_update
+                values_placeholders = ", ".join(f"%({col})s" for col in columns)
 
-                    query = f"""
-                    INSERT INTO hire_checklist ({', '.join(columns)})
-                    VALUES ({values_placeholders})
-                    ON CONFLICT (inspection_id)
-                    DO UPDATE SET
-                        {set_clause}
-                    RETURNING *;
-                    """
+                set_clause = ", ".join(f"{col} = EXCLUDED.{col}" for col in fields_to_update)
 
-                    params = {
-                        "long_claim_id": long_claim_id,
-                        "car_id": car_id,
-                        "claimant_id": claimant_id,
-                        "inspection_id": inspection_id,
-                        **{col: data[col] for col in fields_to_update}
-                    }
+                query = f"""
+                INSERT INTO hire_checklist ({', '.join(columns)})
+                VALUES ({values_placeholders})
+                ON CONFLICT (long_claim_id, car_id, claimant_id)
+                DO UPDATE SET
+                {set_clause}
+                RETURNING *;
+                """
 
-                else:
-                    # ─── INSERT new record ────────────────────────────────────────
-                    columns = ["long_claim_id", "car_id", "claimant_id"] + fields_to_update
-                    values_placeholders = ", ".join(f"%({col})s" for col in columns)
-
-                    query = f"""
-                    INSERT INTO hire_checklist ({', '.join(columns)})
-                    VALUES ({values_placeholders})
-                    RETURNING *;
-                    """
-
-                    params = {
-                        "long_claim_id": long_claim_id,
-                        "car_id": car_id,
-                        "claimant_id": claimant_id,
-                        **{col: data[col] for col in fields_to_update}
-                    }
+                params = {
+                    "long_claim_id": long_claim_id,
+                    "car_id": car_id,
+                    "claimant_id": claimant_id,
+                    **{col: data[col] for col in fields_to_update}
+                }
 
                 cur.execute(query, params)
                 row = cur.fetchone()
+
                 if not row:
                     self.conn.commit()
                     return None
 
                 columns_list = [desc[0] for desc in cur.description]
                 self.conn.commit()
+
                 return dict(zip(columns_list, row))
 
         except Exception as e:
-            print(f"Error in upsert_hire_checklist: {e}")
             self.conn.rollback()
+            print("Error in upsert_hire_checklist:", e)
             return None
-
 
     def get_hire_checklists(
     self,
