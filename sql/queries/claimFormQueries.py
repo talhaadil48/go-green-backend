@@ -3,7 +3,7 @@ from typing import Any, Dict, List, Optional
 import json
 from psycopg2.extras import RealDictCursor
 from decimal import Decimal
-
+import inspect
 
 
 class ClaimFormQueries:
@@ -243,71 +243,7 @@ class ClaimFormQueries:
             self.conn.rollback()
             return None
 
-    def upsert_rental_agreement(self, claim_id: str, data: dict) -> dict | None:
-        updatable_columns = [
-            "hirer_name", "title", "permanent_address",
-            "additional_driver_name", "licence_no",
-             "new_date_issued",
-      "new_expiry_date",
-      "new_dob",
-      "new_date_test_passed","new_licence_no"," new_occupation"    
-            "date_issued", "expiry_date", "dob", "date_test_passed", "occupation",
-            "daily_rate", "policy_excess", "deposit", "refuelling_charge",
-            "insurance_company", "policy_no", "insurance_dates",
-            "own_insurance_confirm", "insurance_date", "insurance_time",
-            "motoring_offence_3yrs", "disqualified_5yrs", "accident_3yrs",
-            "insurance_declined_5yrs", "dishonesty_conviction",
-            "medical_condition1", "medical_condition2", "medical_details",
-            "additional_driver_auth",
-            "hire_vehicle_reg", "hire_vehicle_make", "hire_vehicle_model", "hire_vehicle_group",
-            "hire_vehicle_date_out", "hire_vehicle_date_in",
-            "hire_vehicle_fuel_out", "hire_vehicle_fuel_in",
-            "change_vehicle_reg", "change_vehicle_make", "change_vehicle_model", "change_vehicle_group",
-            "change_vehicle_date_out", "change_vehicle_date_in",
-            "change_vehicle_fuel_out", "change_vehicle_fuel_in",
-            "admin_fee", "delivery_charge", "cdw_per_day",
-            "days_out", "days_in", "total_days",
-            "rate_per_day", "refuelling_total",
-            "subtotal", "vat", "total_cost",
-            "declaration_date", "liability_date",
-            "hirer_signature_terms", "company_signature",
-            "hirer_signature_insurance", "declaration_signature", "liability_signature"
-        ]
-
-        fields_to_update = [col for col in updatable_columns if col in data]
-
-        if not fields_to_update:
-            return None
-
-        set_clause = ", ".join(f"{col} = EXCLUDED.{col}" for col in fields_to_update)
-        columns = ["claim_id"] + fields_to_update
-        values_placeholders = ", ".join(f"%({col})s" for col in columns)
-
-        query = f"""
-        INSERT INTO rental_agreements ({', '.join(columns)})
-        VALUES ({values_placeholders})
-        ON CONFLICT (claim_id)
-        DO UPDATE SET
-            {set_clause}
-        RETURNING *;
-        """
-
-        params = {"claim_id": claim_id, **{k: data[k] for k in fields_to_update}}
-
-        try:
-            with self.conn.cursor() as cur:
-                cur.execute(query, params)
-                row = cur.fetchone()
-                if row:
-                    self.conn.commit()
-                    col_names = [desc[0] for desc in cur.description]
-                    return dict(zip(col_names, row))
-            return None
-        except Exception as e:
-            print(f"Error in upsert_rental_agreement: {e}")
-            self.conn.rollback()
-            return None
-
+   
     def insert_claim(
         self,
         claimant_name: str | None,
