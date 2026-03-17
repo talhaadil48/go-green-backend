@@ -857,13 +857,15 @@ async def update_claimant_name(claim_id: str, payload: Dict[str, Any]):
 async def create_car(payload: CarCreate):
     conn = DBConnection.get_connection()
     queries = Queries(conn)
-
-    queries.insert_car(
-        payload.model,
-        payload.name,
-        payload.reg_no
-    )
-
+    try:
+        queries.insert_car(
+            payload.model,
+            payload.name,
+            payload.reg_no
+        )
+    except Exception as e:
+        conn.rollback()
+        raise HTTPException(status_code=400, detail=str(e))
     return {
         "success": True,
         "message": "Car created successfully"
@@ -890,13 +892,16 @@ async def delete_car(car_id: str):
 async def update_car(car_id: int, payload: CarUpdate):
     conn = DBConnection.get_connection()
     queries = Queries(conn)
-
-    updated = queries.update_car(
-        car_id,
-        payload.model,
-        payload.name,
-        payload.reg_no
-    )
+    try:
+        updated = queries.update_car(
+            car_id,
+            payload.model,
+            payload.name,
+            payload.reg_no
+        )
+    except Exception as e:
+        conn.rollback()
+        raise HTTPException(status_code=400, detail=str(e))
 
     if not updated:
         raise HTTPException(status_code=404, detail="Car not found")
@@ -934,6 +939,22 @@ async def get_all_cars():
         "count": len(cars),
         "data": cars
     }
+
+
+
+@router.get("/cars/free")
+async def get_free_cars():
+    conn = DBConnection.get_connection()
+    queries = Queries(conn)
+
+    cars = queries.get_free_cars()
+
+    return {
+        "success": True,
+        "count": len(cars),
+        "data": cars
+    }
+
 
 
 @router.get("/cars/available")
@@ -1472,3 +1493,63 @@ async def update_drawing_direction(
         "updated_value_column": value_column,
         "value": value,
             }
+
+
+@router.put("/cars/{car_id}/long")
+async def update_long_hire(
+    car_id: int,
+    request: Request
+) -> Dict[str, Any]:
+
+    try:
+        data = await request.json()
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid JSON")
+
+    value = data.get("value")
+
+    if value not in [True, False]:
+        raise HTTPException(status_code=400, detail="value must be true or false")
+
+    conn = DBConnection.get_connection()
+    queries = Queries(conn)
+
+    result = queries.update_is_long_hire(car_id, value)
+
+    if not result:
+        raise HTTPException(status_code=404, detail="Car not found")
+
+    return {
+        "car_id": car_id,
+        "is_long_hire": value
+    }
+
+
+@router.put("/cars/availability/{reg_no}")
+async def update_availability(
+    reg_no: str,
+    request: Request
+) -> Dict[str, Any]:
+
+    try:
+        data = await request.json()
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid JSON")
+
+    value = data.get("value")
+
+    if value not in [True, False]:
+        raise HTTPException(status_code=400, detail="value must be true or false")
+
+    conn = DBConnection.get_connection()
+    queries = Queries(conn)
+
+    result = queries.update_is_available(reg_no, value)
+
+    if not result:
+        raise HTTPException(status_code=404, detail="Car not found")
+
+    return {
+        "reg_no": reg_no,
+        "is_available": value
+    }

@@ -1,6 +1,7 @@
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 import json
+import psycopg2
 from psycopg2.extras import RealDictCursor
 from decimal import Decimal
 import inspect
@@ -353,9 +354,24 @@ class ClaimFormQueries:
 
                     if hire_out and hire_in:
                         self.update_claim_status(claim_id, "hire end")
+                        if result.get("hire_vehicle_reg"):  
+                            self.update_is_available(result.get("hire_vehicle_reg"), True)
                     elif hire_out:
+                        print("Updating claim status to 'hire start'")
                         self.update_claim_status(claim_id, "hire start")
-
+                        if result.get("hire_vehicle_reg"):
+                            print("Updating hire vehicle availability to False")
+                            self.update_is_available(result.get("hire_vehicle_reg"), False)
+                    
+                    if result.get("change_vehicle_date_out") and result.get("change_vehicle_date_in"):
+                          if result.get("change_vehicle_reg"):
+                            self.update_is_available(result.get("change_vehicle_reg"), True)
+                    elif result.get("change_vehicle_date_out"):
+                        if result.get("change_vehicle_reg"):
+                            print("Updating change vehicle availability to False")
+                            self.update_is_available(result.get("change_vehicle_reg"), False)
+                    
+                        
                     self.conn.commit()
                     return result
 
@@ -825,6 +841,10 @@ class ClaimFormQueries:
                 cur.execute(query, (model, name, reg_no))
             self.conn.commit()
             return True
+        
+        except psycopg2.errors.UniqueViolation:
+            self.conn.rollback()
+            raise Exception("Car with this registration number already exists")
         except Exception as e:
             self.conn.rollback()
             raise e
@@ -840,6 +860,9 @@ class ClaimFormQueries:
                 cur.execute(query, (model, name, reg_no, car_id))
             self.conn.commit()
             return True
+        except psycopg2.errors.UniqueViolation:
+            self.conn.rollback()
+            raise Exception("Car with this registration number already exists")
         except Exception as e:
             self.conn.rollback()
             raise e
@@ -851,16 +874,25 @@ class ClaimFormQueries:
             return cur.fetchone()
 
     def get_all_cars(self):
-        query = "SELECT * FROM cars"
+        query = "SELECT * FROM cars ORDER BY id ASC"
         with self.conn.cursor(cursor_factory=RealDictCursor) as cur:
             cur.execute(query)
             return cur.fetchall()
+    
+        
+    def get_free_cars(self):
+        query = "SELECT * FROM cars WHERE is_available = TRUE AND is_long_hire = FALSE ORDER BY id ASC"
+        with self.conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute(query)
+            return cur.fetchall()
+    
         
     def get_available_cars(self):
         query = """
             SELECT *
             FROM cars
-            WHERE id NOT IN (
+            WHERE is_long_hire = TRUE
+            AND id NOT IN (
                 SELECT car_id
                 FROM claimant
                 WHERE end_date IS NULL
@@ -869,7 +901,8 @@ class ClaimFormQueries:
         with self.conn.cursor(cursor_factory=RealDictCursor) as cur:
             cur.execute(query)
             return cur.fetchall()
-        # ---------------------- LONG CLAIMS ----------------------
+        
+         # ---------------------- LONG CLAIMS ----------------------
     def insert_long_claim(self, starting_date, ending_date, hirer_name=None):
         try:
             query = """
@@ -1465,5 +1498,31 @@ class ClaimFormQueries:
             """
             cur.execute(query, (claim_id, value, json_data))
             print(f"Executed upsert_accident_claim_with_json for claim_id={claim_id}, value_column={value_column}, json_column={json_column}")
+            self.conn.commit()
+            return cur.fetchone()
+        
+
+    def update_is_long_hire(self, car_id: int, value: bool) -> dict | None:
+        with self.conn.cursor(cursor_factory=RealDictCursor) as cur:
+            query = """
+                UPDATE cars
+                SET is_long_hire = %s
+                WHERE id = %s
+                RETURNING *;
+            """
+            cur.execute(query, (value, car_id))
+            self.conn.commit()
+            return cur.fetchone()
+
+
+    def update_is_available(self, reg_no: str, value: bool) -> dict | None:
+        with self.conn.cursor(cursor_factory=RealDictCursor) as cur:
+            query = """
+                UPDATE cars
+                SET is_available = %s
+                WHERE reg_no = %s
+                RETURNING *;
+            """
+            cur.execute(query, (value, reg_no))
             self.conn.commit()
             return cur.fetchone()
