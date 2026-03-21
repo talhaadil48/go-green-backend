@@ -3,8 +3,10 @@ from typing import Any, Dict, List, Optional
 import json
 import psycopg2
 from psycopg2.extras import RealDictCursor
+from psycopg2 import errors
 from decimal import Decimal
 import inspect
+from fastapi import HTTPException
 
 
 class ClaimFormQueries:
@@ -966,64 +968,104 @@ class ClaimFormQueries:
     miles=None,
     name=None,
     location=None,
-    delivery_charges=0
+    delivery_charges=0,
+    claimant_id=None,
+    ref_no=None
 ):
         try:
             query = """
                 INSERT INTO claimant
-                (long_claim_id, car_id, start_date, end_date, miles, name, location, delivery_charges)
-                VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
+                (claimant_id, ref_no, long_claim_id, car_id, start_date, end_date, miles, name, location, delivery_charges)
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                 RETURNING id
             """
             with self.conn.cursor() as cur:
                 cur.execute(
                     query,
-                    (long_claim_id, car_id, start_date, end_date, miles, name, location, delivery_charges)
+                    (
+                        claimant_id,
+                        ref_no,
+                        long_claim_id,
+                        car_id,
+                        start_date,
+                        end_date,
+                        miles,
+                        name,
+                        location,
+                        delivery_charges
+                    )
                 )
-                claimant_id = cur.fetchone()[0]
+                new_id = cur.fetchone()[0]
+            print(f"Inserted claimant with ID: {new_id}")
             self.conn.commit()
-            return claimant_id
+            return new_id
+
+        except errors.UniqueViolation:
+            print('hello')
+            self.conn.rollback()
+            raise HTTPException(
+                status_code=400,
+                detail="Claimant ID already exists"
+            )
+
         except Exception as e:
+            print('hwllo')
             self.conn.rollback()
             raise e
-
+        
+        
+        
 
     def update_claimant(
-        self,
-        claimant_id,
-        start_date=None,
-        end_date=None,
-        miles=None,
-        name=None,
-        location=None,
-        delivery_charges=None
+    self,
+    claimant_id,
+    new_claimant_id=None,
+    ref_no=None,
+    start_date=None,
+    end_date=None,
+    miles=None,
+    name=None,
+    location=None,
+    delivery_charges=None
     ):
         try:
-            # Build dynamic update to skip None fields
             fields = []
             values = []
+
+            if new_claimant_id is not None:
+                fields.append("claimant_id=%s")
+                values.append(new_claimant_id)
+
+            if ref_no is not None:
+                fields.append("ref_no=%s")
+                values.append(ref_no)
 
             if start_date is not None:
                 fields.append("start_date=%s")
                 values.append(start_date)
+
             if end_date is not None:
                 fields.append("end_date=%s")
                 values.append(end_date)
+
             if miles is not None:
                 fields.append("miles=%s")
                 values.append(miles)
+
             if name is not None:
                 fields.append("name=%s")
                 values.append(name)
+
             if location is not None:
                 fields.append("location=%s")
                 values.append(location)
+
             if delivery_charges is not None:
                 fields.append("delivery_charges=%s")
                 values.append(delivery_charges)
 
             if not fields:
-                return False  # Nothing to update
+                return False
 
             query = f"""
                 UPDATE claimant
@@ -1037,9 +1079,19 @@ class ClaimFormQueries:
 
             self.conn.commit()
             return True
+
+        except errors.UniqueViolation:
+            self.conn.rollback()
+            raise HTTPException(
+                status_code=400,
+                detail="Claimant ID already exists"
+            )
+
         except Exception as e:
             self.conn.rollback()
             raise e
+        
+
 
     def delete_claimant(self, claimant_id: int):
         try:

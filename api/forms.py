@@ -65,10 +65,12 @@ class CarUpdate(BaseModel):
     model: Optional[str] = None
     name: Optional[str] = None
     reg_no: Optional[str] = None
+
 class ClaimantCreate(BaseModel):
+    claimant_id: Optional[str] = None
+    ref_no: Optional[str] = None
     long_claim_id: str
     car_id: int
-
     start_date: Optional[str] = None
     end_date: Optional[str] = None
     miles: Optional[float] = None
@@ -76,8 +78,9 @@ class ClaimantCreate(BaseModel):
     location: Optional[str] = None
     delivery_charges: Optional[float] = 0
 
-
 class ClaimantUpdate(BaseModel):
+    claimant_id: Optional[str] = None
+    ref_no: Optional[str] = None
     start_date: Optional[str] = None
     end_date: Optional[str] = None
     miles: Optional[float] = None
@@ -1060,25 +1063,34 @@ async def get_all_long_claims():
 async def create_claimant(payload: ClaimantCreate):
     conn = DBConnection.get_connection()
     queries = Queries(conn)
-    if not payload.start_date:
-        payload.start_date = None
-    if not payload.end_date:
-        payload.end_date = None
-    claimant_id = queries.insert_claimant(
-        payload.long_claim_id,
-        payload.car_id,
-        payload.start_date,
-        payload.end_date,
-        payload.miles,
-        payload.name,
-        payload.location,
-        payload.delivery_charges or 0  # default to 0 if None
-    )
 
-    return {
-        "success": True,
-        "claimant_id": claimant_id
-    }
+    try:
+        claimant_id = queries.insert_claimant(
+            payload.long_claim_id,
+            payload.car_id,
+            payload.start_date,
+            payload.end_date,
+            payload.miles,
+            payload.name,
+            payload.location,
+            payload.delivery_charges or 0,
+            payload.claimant_id,
+            payload.ref_no
+        )
+
+        return {
+            "success": True,
+            "claimant_id": claimant_id
+        }
+
+    except ValueError as e:
+        return HTTPException(
+            status_code=400,
+            detail=str(e)
+        )
+
+
+
 
 
 @router.put("/claimant/{claimant_id}")
@@ -1086,21 +1098,29 @@ async def update_claimant(claimant_id: int, payload: ClaimantUpdate):
     conn = DBConnection.get_connection()
     queries = Queries(conn)
 
-    queries.update_claimant(
-        claimant_id,
-        start_date=payload.start_date,
-        end_date=payload.end_date,
-        miles=payload.miles,
-        name=payload.name,
-        location=payload.location,
-        delivery_charges=payload.delivery_charges
-    )
+    try:
+        queries.update_claimant(
+            claimant_id,
+            new_claimant_id=payload.claimant_id,
+            ref_no=payload.ref_no,
+            start_date=payload.start_date,
+            end_date=payload.end_date,
+            miles=payload.miles,
+            name=payload.name,
+            location=payload.location,
+            delivery_charges=payload.delivery_charges
+        )
 
-    return {
-        "success": True,
-        "message": "Claimant updated successfully"
-    }
+        return {
+            "success": True,
+            "message": "Claimant updated successfully"
+        }
 
+    except ValueError as e:
+        return HTTPException(
+            status_code=400,
+            detail=str(e)
+        )
 
 @router.delete("/claimant/{claimant_id}")
 async def delete_claimant(claimant_id: int):
