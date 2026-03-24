@@ -316,7 +316,7 @@ class ClaimFormQueries:
             "declaration_date", "liability_date",
             "hirer_signature_terms", "company_signature",
             "hirer_signature_insurance", "declaration_signature", "liability_signature",
-            "change_vehicle_history"
+            "change_vehicle_history","hire_vehicle_miles_out","hire_vehicle_miles_in"
         ]
 
         fields_to_update = [col for col in updatable_columns if col in data]
@@ -561,10 +561,20 @@ class ClaimFormQueries:
         query = """
             SELECT
                 c.*,
+                
+                -- latest invoice
                 i.id AS invoice_id,
                 i.invoice_datetime,
-                i.info
+                i.info,
+
+                -- final hire end date (max of both)
+                GREATEST(
+                    ra.hire_vehicle_date_in,
+                    ra.latest_history_date
+                ) AS hire_end_date
+
             FROM claims c
+
             LEFT JOIN (
                 SELECT DISTINCT ON (claim_id)
                     id,
@@ -575,13 +585,33 @@ class ClaimFormQueries:
                 ORDER BY claim_id, invoice_datetime DESC
             ) i
             ON c.claim_id = i.claim_id
+
+            LEFT JOIN (
+                SELECT
+                    claim_id,
+                    hire_vehicle_date_in,
+
+                    -- get latest date_out from JSON, ignore empty strings
+                    (
+                        SELECT MAX(NULLIF(elem->>'date_out','')::date)
+                        FROM jsonb_array_elements(change_vehicle_history::jsonb) elem
+                        WHERE (elem->>'date_out') IS NOT NULL
+                    ) AS latest_history_date
+
+                FROM rental_agreements
+            ) ra
+            ON c.claim_id = ra.claim_id
+
             WHERE c.recently_deleted = FALSE;
         """
+
         with self.conn.cursor() as cur:
             cur.execute(query)
             rows = cur.fetchall()
             columns = [desc[0] for desc in cur.description]
             return [dict(zip(columns, row)) for row in rows]
+        
+
     def get_claim_by_id(self, claim_id: str) -> dict | None:
         query = "SELECT * FROM claims WHERE claim_id = %s;"
         with self.conn.cursor() as cur:
@@ -1416,7 +1446,6 @@ class ClaimFormQueries:
                 if cur.rowcount == 0:
                     return False
                 self.conn.commit()
-                self.update_claim_status(claim_id, "close claim")
             return True
         except Exception as e:
             print(f"Error in close_claim: {e}")
@@ -1610,7 +1639,6 @@ class ClaimFormQueries:
             self.conn.commit()
             return cur.fetchone()
         
-
     def get_claim_summary(self, claim_id: str) -> dict | None:
         summary = {
             "claim": None,
@@ -1634,9 +1662,29 @@ class ClaimFormQueries:
             columns = [desc[0] for desc in cur.description]
             summary["claim"] = dict(zip(columns, row))
 
-            # 2. Accident claim - only checklist_vd + a few important fields
+            # 2. Accident claim (driver + vehicle + checklist_vd)
             cur.execute("""
-                SELECT checklist_vd
+                SELECT 
+                    checklist_vd,
+
+                    -- Driver details
+                    driver_full_name,
+                    driver_email,
+                    driver_telephone,
+                    driver_address,
+                    driver_postcode,
+                    driver_dob,
+                    driver_ni_number,
+                    driver_occupation,
+
+                    -- Vehicle details
+                    client_vehicle_make,
+                    client_vehicle_model,
+                    client_registration,
+                    client_policy_no,
+                    client_cover_type,
+                    client_policy_holder
+
                 FROM accident_claims 
                 WHERE claim_id = %s;
             """, (claim_id,))
@@ -1645,11 +1693,20 @@ class ClaimFormQueries:
                 columns = [desc[0] for desc in cur.description]
                 summary["accident_claim"] = dict(zip(columns, row))
 
-            # 3. Rental Agreement - only the fields you asked for
+            # 3. Rental Agreement (expanded fields)
             cur.execute("""
-                SELECT hire_vehicle_reg, hire_vehicle_make, hire_vehicle_model,
-                    hire_vehicle_date_out, hire_vehicle_date_in,
+                SELECT 
+                    hire_vehicle_reg,
+                    hire_vehicle_make,
+                    hire_vehicle_model,
+                    hire_vehicle_date_out,
+                    hire_vehicle_date_in,
+                    hire_vehicle_miles_out,
+                    hire_vehicle_miles_in,
                     change_vehicle_history
+                        
+
+
                 FROM rental_agreements 
                 WHERE claim_id = %s;
             """, (claim_id,))
@@ -1658,7 +1715,7 @@ class ClaimFormQueries:
                 columns = [desc[0] for desc in cur.description]
                 summary["rental_agreement"] = dict(zip(columns, row))
 
-            # 4. Storage Form - only storage_location_key
+            # 4. Storage Form
             cur.execute("""
                 SELECT storage_location_key
                 FROM storage_forms 
@@ -1668,7 +1725,7 @@ class ClaimFormQueries:
             if row:
                 summary["storage_form"] = {"storage_location_key": row[0]}
 
-            # 5. All matching invoices (full invoice rows as before)
+            # 5. Invoices
             cur.execute("""
                 SELECT id, invoice_datetime, info, storage_bill, rent_bill
                 FROM invoice 
@@ -1680,4 +1737,20 @@ class ClaimFormQueries:
                 columns = [desc[0] for desc in cur.description]
                 summary["invoices"] = [dict(zip(columns, row)) for row in rows]
 
-        return summary
+        return summary  
+    
+    def get_claim_lock(self, claim_id: str) -> dict | None:
+        query = "SELECT * FROM claims WHERE claim_id = %s;"
+        with self.conn.cursor() as cur:
+            cur.execute(query, (claim_id,))
+            row = cur.fetchone()
+            if row:
+                columns = [desc[0] for desc in cur.description]
+                return dict(zip(columns, row))
+        return None
+
+    def update_claim_lock(self, claim_id: str, locked: bool, locked_by: str | None):
+        query = "UPDATE claims SET locked = %s, locked_by = %s WHERE claim_id = %s;"
+        with self.conn.cursor() as cur:
+            cur.execute(query, (locked, locked_by, claim_id))
+        self.conn.commit()

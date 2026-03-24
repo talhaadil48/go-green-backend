@@ -21,6 +21,10 @@ class DailyRateUpdate(BaseModel):
     daily_rate: float
 
 
+class ClaimLockUpdate(BaseModel):
+    locked: bool
+    locked_by: Optional[str] = None
+
 class InvoiceCreate(BaseModel):
     claim_id: str
     info: str
@@ -128,6 +132,7 @@ def get_current_user(
             detail="Invalid or expired token",
             headers={"WWW-Authenticate": "Bearer"},
         )
+    
 
     return CurrentUser(
         id=payload.get("sub"),
@@ -415,7 +420,9 @@ async def get_rental_agreement(claim_id: str) -> Dict[str, Any]:
         "hirer_signature_insurance": result.get("hirer_signature_insurance"),
         "declaration_signature": result.get("declaration_signature"),
         "liability_signature": result.get("liability_signature"),
-        "change_vehicle_history": result.get("change_vehicle_history", "")
+        "change_vehicle_history": result.get("change_vehicle_history", ""),
+        "hire_vehicle_miles_out": result.get("hire_vehicle_miles_out", ""),
+        "hire_vehicle_miles_in": result.get("hire_vehicle_miles_in", "")
     }
     return response
 
@@ -1586,3 +1593,45 @@ async def get_claim_summary(claim_id: str):
         raise HTTPException(status_code=404, detail="Claim not found")
 
     return result
+
+
+
+
+# --- UPDATE LOCK STATUS ---
+@router.put("/claims/{claim_id}/lock", response_model=None)
+async def update_claim_lock(
+    claim_id: str,
+    update: ClaimLockUpdate,
+    current_user: CurrentUser = Depends(get_current_user)
+):
+    conn = DBConnection.get_connection()
+    queries = Queries(conn)
+
+    print(f"Updating lock status for claim_id: {claim_id} to {update.locked} by user: {current_user.username}")
+    queries.update_claim_lock(
+        claim_id=claim_id,
+        locked=update.locked,
+        locked_by=update.locked_by if update.locked else None
+    )
+
+    return {
+        "claim_id": claim_id,
+        "locked": update.locked,
+        "locked_by": update.locked_by if update.locked else None
+    }
+
+# --- GET LOCK STATUS ---
+@router.get("/claims/{claim_id}/lock", response_model=None)
+async def get_claim_lock_status(claim_id: str):
+    conn = DBConnection.get_connection()
+    queries = Queries(conn)
+    print(f"Fetching lock status for claim_id: {claim_id}")
+    claim = queries.get_claim_lock(claim_id)
+    if not claim:
+        raise HTTPException(status_code=404, detail="Claim not found")
+
+    return {
+        "claim_id": claim_id,
+        "locked": claim.get("locked", False),
+        "locked_by": claim.get("locked_by")
+    }

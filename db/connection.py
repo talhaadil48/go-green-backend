@@ -100,4 +100,16 @@ def split_car_name_and_model():
 
 
 if __name__ == "__main__":
-    split_car_name_and_model()
+    conn = DBConnection.get_connection()  # get your connection
+    try:
+        conn.rollback()  # kill any bad transaction instantly
+    except:
+        pass  # if already clean, ignore
+
+    cur = conn.cursor()
+    cur.execute("SELECT 1")  # now works
+
+
+
+
+        
