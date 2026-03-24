@@ -303,7 +303,8 @@ async def upsert_storage_form(request: Request) -> Dict[str, Any]:
         "owner_date": result.get("owner_date", ""),
         "client_signature": result.get("client_signature"),
         "owner_signature": result.get("owner_signature"),
-        "claim_id": result["claim_id"]
+        "claim_id": result["claim_id"],
+        "storage_location_key": result.get("storage_location_key", "")
     }
 
     return response

@@ -201,7 +201,7 @@ class ClaimFormQueries:
             "date_of_recovery", "storage_start_date", "storage_end_date",
             "number_of_days", "charges_per_day", "total_storage_charge",
             "recovery_charge", "subtotal", "vat_amount", "invoice_total",
-            "client_date", "owner_date", "client_signature", "owner_signature"
+            "client_date", "owner_date", "client_signature", "owner_signature" , "storage_location_key"
         ]
 
         fields_to_update = [col for col in updatable_columns if col in data]
