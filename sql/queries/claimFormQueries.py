@@ -7,7 +7,7 @@ from psycopg2 import errors
 from decimal import Decimal
 import inspect
 from fastapi import HTTPException
-
+import json
 
 class ClaimFormQueries:
     def __init__(self, conn):
@@ -288,17 +288,13 @@ class ClaimFormQueries:
             cur.execute(query, (new_name, claim_id))
             self.conn.commit()
             return cur.rowcount > 0  # True if any row was updated
-
     def upsert_rental_agreement(self, claim_id: str, data: dict) -> dict | None:
+
+
         updatable_columns = [
             "hirer_name", "title", "permanent_address",
             "additional_driver_name", "licence_no",
-            "new_date_issued",
-            "new_expiry_date",
-            "new_dob",
-            "new_date_test_passed",
-            "new_licence_no",
-            "new_occupation",
+            "new_date_issued", "new_expiry_date", "new_dob", "new_date_test_passed", "new_occupation", "new_licence_no",
             "date_issued", "expiry_date", "dob", "date_test_passed", "occupation",
             "daily_rate", "policy_excess", "deposit", "refuelling_charge",
             "insurance_company", "policy_no", "insurance_dates",
@@ -319,11 +315,11 @@ class ClaimFormQueries:
             "subtotal", "vat", "total_cost",
             "declaration_date", "liability_date",
             "hirer_signature_terms", "company_signature",
-            "hirer_signature_insurance", "declaration_signature", "liability_signature"
+            "hirer_signature_insurance", "declaration_signature", "liability_signature",
+            "change_vehicle_history"
         ]
 
         fields_to_update = [col for col in updatable_columns if col in data]
-
         if not fields_to_update:
             return None
 
@@ -340,7 +336,13 @@ class ClaimFormQueries:
         RETURNING *;
         """
 
-        params = {"claim_id": claim_id, **{k: data[k] for k in fields_to_update}}
+        # serialize change_vehicle_history to JSON
+        params = {"claim_id": claim_id}
+        for k in fields_to_update:
+            if k == "change_vehicle_history" and k in data:
+                params[k] = json.dumps(data[k])
+            else:
+                params[k] = data[k]
 
         try:
             with self.conn.cursor() as cur:
@@ -351,29 +353,39 @@ class ClaimFormQueries:
                     col_names = [desc[0] for desc in cur.description]
                     result = dict(zip(col_names, row))
 
+                    # --- hire vehicle availability logic ---
                     hire_out = result.get("hire_vehicle_date_out")
                     hire_in = result.get("hire_vehicle_date_in")
+                    hire_reg = result.get("hire_vehicle_reg")
 
                     if hire_out and hire_in:
                         self.update_claim_status(claim_id, "hire end")
-                        if result.get("hire_vehicle_reg"):  
-                            self.update_is_available(result.get("hire_vehicle_reg"), True)
+                        if hire_reg:
+                            self.update_is_available(hire_reg, True)
                     elif hire_out:
-                        print("Updating claim status to 'hire start'")
                         self.update_claim_status(claim_id, "hire start")
-                        if result.get("hire_vehicle_reg"):
-                            print("Updating hire vehicle availability to False")
-                            self.update_is_available(result.get("hire_vehicle_reg"), False)
-                    
-                    if result.get("change_vehicle_date_out") and result.get("change_vehicle_date_in"):
-                          if result.get("change_vehicle_reg"):
-                            self.update_is_available(result.get("change_vehicle_reg"), True)
-                    elif result.get("change_vehicle_date_out"):
-                        if result.get("change_vehicle_reg"):
-                            print("Updating change vehicle availability to False")
-                            self.update_is_available(result.get("change_vehicle_reg"), False)
-                    
-                        
+                        if hire_reg:
+                            self.update_is_available(hire_reg, False)
+
+                    # --- change vehicle availability logic ---
+                    change_history = result.get("change_vehicle_history")
+                    if change_history:
+                        if isinstance(change_history, str):
+                            change_history = json.loads(change_history)
+
+                        for change in change_history:
+                            reg = change.get("vehicle_reg")
+                            out_date = change.get("date_out")
+                            in_date = change.get("date_in")
+
+                            if not reg:
+                                continue
+
+                            if out_date and in_date:
+                                self.update_is_available(reg, True)
+                            elif out_date:
+                                self.update_is_available(reg, False)
+
                     self.conn.commit()
                     return result
 
@@ -383,7 +395,6 @@ class ClaimFormQueries:
             print(f"Error in upsert_rental_agreement: {e}")
             self.conn.rollback()
             return None
-        
 
 
 
@@ -875,13 +886,33 @@ class ClaimFormQueries:
             cur.execute(query, (car_id,))
             return cur.fetchone()
 
+
     def get_all_cars(self):
-        query = "SELECT * FROM cars ORDER BY id ASC"
         with self.conn.cursor(cursor_factory=RealDictCursor) as cur:
-            cur.execute(query)
+            cur.execute("""
+                SELECT 
+                    c.*,
+                    ra.claim_id AS current_holder_claim_id
+                FROM cars c
+                LEFT JOIN LATERAL (
+                    SELECT r.claim_id
+                    FROM rental_agreements r
+                    WHERE (r.hire_vehicle_reg = c.reg_no 
+                            AND r.hire_vehicle_date_out IS NOT NULL 
+                            AND r.hire_vehicle_date_in IS NULL)
+                    OR EXISTS (
+                            SELECT 1
+                            FROM jsonb_array_elements(r.change_vehicle_history) AS ch
+                            WHERE ch->>'vehicle_reg' = c.reg_no
+                            AND ch->>'date_out' IS NOT NULL
+                            AND (ch->>'date_in' IS NULL OR (ch->>'date_in')::date > CURRENT_DATE)
+                    )
+                    ORDER BY r.rental_agreement_id DESC
+                    LIMIT 1
+                ) ra ON TRUE
+                ORDER BY c.id ASC
+            """)
             return cur.fetchall()
-    
-        
     def get_free_cars(self):
         query = "SELECT * FROM cars WHERE is_available = TRUE AND is_long_hire = FALSE ORDER BY id ASC"
         with self.conn.cursor(cursor_factory=RealDictCursor) as cur:
@@ -1578,3 +1609,75 @@ class ClaimFormQueries:
             cur.execute(query, (value, reg_no))
             self.conn.commit()
             return cur.fetchone()
+        
+
+    def get_claim_summary(self, claim_id: str) -> dict | None:
+        summary = {
+            "claim": None,
+            "accident_claim": None,
+            "rental_agreement": None,
+            "storage_form": None,
+            "invoices": []
+        }
+
+        with self.conn.cursor() as cur:
+            # 1. Basic claim info
+            cur.execute("""
+                SELECT claim_id, claimant_name, claim_type, claim_start_date, status, 
+                    closed_date, closed_by, recently_deleted
+                FROM claims 
+                WHERE claim_id = %s;
+            """, (claim_id,))
+            row = cur.fetchone()
+            if not row:
+                return None
+            columns = [desc[0] for desc in cur.description]
+            summary["claim"] = dict(zip(columns, row))
+
+            # 2. Accident claim - only checklist_vd + a few important fields
+            cur.execute("""
+                SELECT checklist_vd
+                FROM accident_claims 
+                WHERE claim_id = %s;
+            """, (claim_id,))
+            row = cur.fetchone()
+            if row:
+                columns = [desc[0] for desc in cur.description]
+                summary["accident_claim"] = dict(zip(columns, row))
+
+            # 3. Rental Agreement - only the fields you asked for
+            cur.execute("""
+                SELECT hire_vehicle_reg, hire_vehicle_make, hire_vehicle_model,
+                    hire_vehicle_date_out, hire_vehicle_date_in,
+                    change_vehicle_history
+                FROM rental_agreements 
+                WHERE claim_id = %s;
+            """, (claim_id,))
+            row = cur.fetchone()
+            if row:
+                columns = [desc[0] for desc in cur.description]
+                summary["rental_agreement"] = dict(zip(columns, row))
+
+            # 4. Storage Form - only storage_location_key
+            cur.execute("""
+                SELECT storage_location_key
+                FROM storage_forms 
+                WHERE claim_id = %s;
+            """, (claim_id,))
+            row = cur.fetchone()
+            if row:
+                summary["storage_form"] = {"storage_location_key": row[0]}
+
+            # 5. All matching invoices (full invoice rows as before)
+            cur.execute("""
+                SELECT id, invoice_datetime, info, storage_bill, rent_bill
+                FROM invoice 
+                WHERE claim_id = %s 
+                ORDER BY invoice_datetime DESC;
+            """, (claim_id,))
+            rows = cur.fetchall()
+            if rows:
+                columns = [desc[0] for desc in cur.description]
+                summary["invoices"] = [dict(zip(columns, row)) for row in rows]
+
+        return summary

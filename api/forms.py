@@ -415,6 +415,7 @@ async def get_rental_agreement(claim_id: str) -> Dict[str, Any]:
         "hirer_signature_insurance": result.get("hirer_signature_insurance"),
         "declaration_signature": result.get("declaration_signature"),
         "liability_signature": result.get("liability_signature"),
+        "change_vehicle_history": result.get("change_vehicle_history", "")
     }
     return response
 
@@ -1574,3 +1575,14 @@ async def update_availability(
         "reg_no": reg_no,
         "is_available": value
     }
+
+
+@router.get("/summary/{claim_id}", response_model=Dict[str, Any])
+async def get_claim_summary(claim_id: str):
+    conn = DBConnection.get_connection()
+    queries = Queries(conn)
+    result = queries.get_claim_summary(claim_id)
+    if not result:
+        raise HTTPException(status_code=404, detail="Claim not found")
+
+    return result
