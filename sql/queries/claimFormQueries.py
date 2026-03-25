@@ -1025,7 +1025,7 @@ class ClaimFormQueries:
                             FROM jsonb_array_elements(r.change_vehicle_history) AS ch
                             WHERE ch->>'vehicle_reg' = c.reg_no
                             AND ch->>'date_out' IS NOT NULL
-                            AND (ch->>'date_in' IS NULL OR NULLIF(ch->>'date_in', '')::date > CURRENT_DATE)
+                            AND (ch->>'date_in' = '' or ch->>'date_in' IS NULL)
                     )
                     ORDER BY r.rental_agreement_id DESC
                     LIMIT 1
