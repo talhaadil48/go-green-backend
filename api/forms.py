@@ -1635,3 +1635,18 @@ async def get_claim_lock_status(claim_id: str):
         "locked": claim.get("locked", False),
         "locked_by": claim.get("locked_by")
     }
+
+
+@router.get("/fleet-history", response_model=None)
+async def get_all_fleet_history():
+    conn = DBConnection.get_connection()
+    queries = Queries(conn)
+
+    print("Fetching all fleet history")
+
+    history = queries.get_all_fleet_history()
+
+    return {
+        "count": len(history),
+        "data": history
+    }

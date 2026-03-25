@@ -288,8 +288,57 @@ class ClaimFormQueries:
             cur.execute(query, (new_name, claim_id))
             self.conn.commit()
             return cur.rowcount > 0  # True if any row was updated
+        
     def upsert_rental_agreement(self, claim_id: str, data: dict) -> dict | None:
 
+        def get_existing_rental():
+            query = """
+                SELECT
+                    hire_vehicle_reg,
+                    hire_vehicle_date_out,
+                    hire_vehicle_date_in,
+                    change_vehicle_history
+                FROM rental_agreements
+                WHERE claim_id = %s;
+            """
+            with self.conn.cursor() as cur:
+                cur.execute(query, (claim_id,))
+                row = cur.fetchone()
+                if not row:
+                    return {}
+
+                cols = [d[0] for d in cur.description]
+                result = dict(zip(cols, row))
+
+                if result.get("change_vehicle_history") and isinstance(result["change_vehicle_history"], str):
+                    result["change_vehicle_history"] = json.loads(result["change_vehicle_history"])
+
+                return result
+
+        def handle_fleet_history(reg, old_out, old_in, new_out, new_in):
+            # invalid case
+            if new_in and not new_out:
+                return
+
+            # prevent changing date_out
+            if old_out and new_out and old_out != new_out:
+                return
+
+            # CASE 1: both null → insert
+            if not old_out and not old_in:
+                if new_out and not new_in:
+                    self.insert_fleet_history(new_out, None, claim_id, reg)
+                elif new_out and new_in:
+                    self.insert_fleet_history(new_out, new_in, claim_id, reg)
+
+            # CASE 2: out exists, in null → update
+            elif old_out and not old_in:
+                if new_out and new_in:
+                    self.update_fleet_history_hire_end(new_in, claim_id, reg, old_out)
+
+            # CASE 3: both exist → do nothing
+
+        existing = get_existing_rental()
 
         updatable_columns = [
             "hirer_name", "title", "permanent_address",
@@ -316,7 +365,7 @@ class ClaimFormQueries:
             "declaration_date", "liability_date",
             "hirer_signature_terms", "company_signature",
             "hirer_signature_insurance", "declaration_signature", "liability_signature",
-            "change_vehicle_history","hire_vehicle_miles_out","hire_vehicle_miles_in"
+            "change_vehicle_history", "hire_vehicle_miles_out", "hire_vehicle_miles_in"
         ]
 
         fields_to_update = [col for col in updatable_columns if col in data]
@@ -336,7 +385,6 @@ class ClaimFormQueries:
         RETURNING *;
         """
 
-        # serialize change_vehicle_history to JSON
         params = {"claim_id": claim_id}
         for k in fields_to_update:
             if k == "change_vehicle_history" and k in data:
@@ -349,45 +397,89 @@ class ClaimFormQueries:
                 cur.execute(query, params)
                 row = cur.fetchone()
 
-                if row:
-                    col_names = [desc[0] for desc in cur.description]
-                    result = dict(zip(col_names, row))
+                if not row:
+                    return None
 
-                    # --- hire vehicle availability logic ---
-                    hire_out = result.get("hire_vehicle_date_out")
-                    hire_in = result.get("hire_vehicle_date_in")
-                    hire_reg = result.get("hire_vehicle_reg")
+                col_names = [desc[0] for desc in cur.description]
+                result = dict(zip(col_names, row))
 
-                    if hire_out and hire_in:
-                        self.update_claim_status(claim_id, "hire end")
-                        if hire_reg:
-                            self.update_is_available(hire_reg, True)
-                    elif hire_out:
-                        self.update_claim_status(claim_id, "hire start")
-                        if hire_reg:
-                            self.update_is_available(hire_reg, False)
+                # ---------------------------
+                # 🚗 HIRE VEHICLE HISTORY
+                # ---------------------------
+                old_out = existing.get("hire_vehicle_date_out")
+                old_in = existing.get("hire_vehicle_date_in")
 
-                    # --- change vehicle availability logic ---
-                    change_history = result.get("change_vehicle_history")
-                    if change_history:
-                        if isinstance(change_history, str):
-                            change_history = json.loads(change_history)
+                new_out = result.get("hire_vehicle_date_out")
+                new_in = result.get("hire_vehicle_date_in")
+                reg = result.get("hire_vehicle_reg")
 
-                        for change in change_history:
-                            reg = change.get("vehicle_reg")
-                            out_date = change.get("date_out")
-                            in_date = change.get("date_in")
+                if reg:
+                    handle_fleet_history(reg, old_out, old_in, new_out, new_in)
 
-                            if not reg:
-                                continue
+                # ---------------------------
+                # 🔁 CHANGE VEHICLE HISTORY
+                # ---------------------------
+                old_history = existing.get("change_vehicle_history", [])
+                new_history = result.get("change_vehicle_history")
 
-                            if out_date and in_date:
-                                self.update_is_available(reg, True)
-                            elif out_date:
-                                self.update_is_available(reg, False)
+                if isinstance(new_history, str):
+                    new_history = json.loads(new_history)
 
-                    self.conn.commit()
-                    return result
+                old_map = {
+                    (c.get("vehicle_reg"), c.get("date_out")): c
+                    for c in old_history or []
+                }
+
+                for change in new_history or []:
+                    reg = change.get("vehicle_reg")
+                    new_out = change.get("date_out")
+                    new_in = change.get("date_in")
+
+                    if not reg:
+                        continue
+
+                    old = old_map.get((reg, new_out), {})
+                    old_out = old.get("date_out")
+                    old_in = old.get("date_in")
+
+                    handle_fleet_history(reg, old_out, old_in, new_out, new_in)
+
+                # ---------------------------
+                # 🚗 AVAILABILITY LOGIC (unchanged)
+                # ---------------------------
+                hire_out = result.get("hire_vehicle_date_out")
+                hire_in = result.get("hire_vehicle_date_in")
+                hire_reg = result.get("hire_vehicle_reg")
+
+                if hire_out and hire_in:
+                    self.update_claim_status(claim_id, "hire end")
+                    if hire_reg:
+                        self.update_is_available(hire_reg, True)
+                elif hire_out:
+                    self.update_claim_status(claim_id, "hire start")
+                    if hire_reg:
+                        self.update_is_available(hire_reg, False)
+
+                change_history = result.get("change_vehicle_history")
+                if change_history:
+                    if isinstance(change_history, str):
+                        change_history = json.loads(change_history)
+
+                    for change in change_history:
+                        reg = change.get("vehicle_reg")
+                        out_date = change.get("date_out")
+                        in_date = change.get("date_in")
+
+                        if not reg:
+                            continue
+
+                        if out_date and in_date:
+                            self.update_is_available(reg, True)
+                        elif out_date:
+                            self.update_is_available(reg, False)
+
+                self.conn.commit()
+                return result
 
             return None
 
@@ -395,8 +487,6 @@ class ClaimFormQueries:
             print(f"Error in upsert_rental_agreement: {e}")
             self.conn.rollback()
             return None
-
-
 
     def upsert_claim_documents(self, claim_id: str, documents: dict) -> None:
         query = """
@@ -1754,3 +1844,47 @@ class ClaimFormQueries:
         with self.conn.cursor() as cur:
             cur.execute(query, (locked, locked_by, claim_id))
         self.conn.commit()
+
+    def insert_fleet_history(self, hire_start: str, hire_end: str, claim_id: str, car_reg: str):
+        query = """
+            INSERT INTO fleet_history (hire_start, hire_end, claim_id, car_reg)
+            VALUES (%s, %s, %s, %s);
+        """
+        with self.conn.cursor() as cur:
+            cur.execute(query, (hire_start, hire_end, claim_id, car_reg))
+        self.conn.commit()
+
+    def update_fleet_history_hire_end(
+    self,
+    hire_end: str,
+    claim_id: str,
+    car_reg: str,
+    hire_start: str
+):
+        query = """
+            UPDATE fleet_history
+            SET hire_end = %s
+            WHERE claim_id = %s
+            AND car_reg = %s
+            AND hire_start = %s;
+        """
+        with self.conn.cursor() as cur:
+            cur.execute(query, (hire_end, claim_id, car_reg, hire_start))
+        self.conn.commit()
+
+
+    def get_all_fleet_history(self) -> list[dict]:
+        query = """
+            SELECT *
+            FROM fleet_history
+            ORDER BY hire_start DESC;
+        """
+        with self.conn.cursor() as cur:
+            cur.execute(query)
+            rows = cur.fetchall()
+
+            if not rows:
+                return []
+
+            col_names = [desc[0] for desc in cur.description]
+            return [dict(zip(col_names, row)) for row in rows]
