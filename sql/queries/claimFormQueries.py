@@ -1025,7 +1025,7 @@ class ClaimFormQueries:
                             FROM jsonb_array_elements(r.change_vehicle_history) AS ch
                             WHERE ch->>'vehicle_reg' = c.reg_no
                             AND ch->>'date_out' IS NOT NULL
-                            AND (ch->>'date_in' IS NULL OR (ch->>'date_in')::date > CURRENT_DATE)
+                            AND (ch->>'date_in' IS NULL OR NULLIF(ch->>'date_in', '')::date > CURRENT_DATE)
                     )
                     ORDER BY r.rental_agreement_id DESC
                     LIMIT 1
@@ -1033,8 +1033,10 @@ class ClaimFormQueries:
                 ORDER BY c.id ASC
             """)
             return cur.fetchall()
+
+
     def get_free_cars(self):
-        query = "SELECT * FROM cars WHERE is_available = TRUE AND is_long_hire = FALSE ORDER BY id ASC"
+        query = "SELECT * FROM cars WHERE is_long_hire = FALSE ORDER BY id ASC"
         with self.conn.cursor(cursor_factory=RealDictCursor) as cur:
             cur.execute(query)
             return cur.fetchall()
