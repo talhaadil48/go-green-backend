@@ -290,7 +290,7 @@ class ClaimFormQueries:
             return cur.rowcount > 0  # True if any row was updated
 
 
-            
+
     def upsert_rental_agreement(self, claim_id: str, data: dict) -> dict | None:
 
         def get_existing_rental():
@@ -1540,16 +1540,18 @@ class ClaimFormQueries:
             raise e
         
 
-    def close_claim(self, claim_id: str, closed_by: str) -> bool:
+    def close_claim(self, claim_id: str, closed_by: str, reason: str | None) -> bool:
+        print(claim_id, closed_by, reason)
         query = """
             UPDATE claims
             SET closed_by = %s,
-                closed_date = NOW()
+                closed_date = NOW(),
+                reason = %s
             WHERE claim_id = %s;
         """
         try:
             with self.conn.cursor() as cur:
-                cur.execute(query, (closed_by, claim_id))
+                cur.execute(query, (closed_by, reason, claim_id))
                 if cur.rowcount == 0:
                     return False
                 self.conn.commit()
@@ -1563,7 +1565,8 @@ class ClaimFormQueries:
         query = """
             UPDATE claims
             SET closed_by = NULL,
-                closed_date = NULL
+                closed_date = NULL,
+                reason = NULL
             WHERE claim_id = %s;
         """
         try:

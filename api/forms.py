@@ -97,6 +97,7 @@ class SoftDeleteClaimRequest(BaseModel):
 
 class CloseClaimRequest(BaseModel):
     closed_by: str
+    reason : Optional[str] = None
 
 class LongHireInvoiceCreate(BaseModel):
     claim_id: str
@@ -652,7 +653,7 @@ async def close_claim(claim_id: str, request: CloseClaimRequest):
     conn = DBConnection.get_connection()
     queries = Queries(conn)
 
-    closed = queries.close_claim(claim_id, request.closed_by)
+    closed = queries.close_claim(claim_id, request.closed_by,request.reason)
 
     if not closed:
         raise HTTPException(
