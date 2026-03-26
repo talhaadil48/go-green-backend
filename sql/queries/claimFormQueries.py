@@ -288,7 +288,9 @@ class ClaimFormQueries:
             cur.execute(query, (new_name, claim_id))
             self.conn.commit()
             return cur.rowcount > 0  # True if any row was updated
-        
+
+
+            
     def upsert_rental_agreement(self, claim_id: str, data: dict) -> dict | None:
 
         def get_existing_rental():
@@ -419,18 +421,19 @@ class ClaimFormQueries:
                 # ---------------------------
                 # 🔁 CHANGE VEHICLE HISTORY
                 # ---------------------------
-                old_history = existing.get("change_vehicle_history", [])
+                old_history = existing.get("change_vehicle_history", []) or []
                 new_history = result.get("change_vehicle_history")
 
                 if isinstance(new_history, str):
                     new_history = json.loads(new_history)
+                new_history = new_history or []
 
                 old_map = {
                     (c.get("vehicle_reg"), c.get("date_out")): c
-                    for c in old_history or []
+                    for c in old_history
                 }
 
-                for change in new_history or []:
+                for change in new_history:
                     reg = change.get("vehicle_reg")
                     new_out = change.get("date_out")
                     new_in = change.get("date_in")
@@ -445,27 +448,34 @@ class ClaimFormQueries:
                     handle_fleet_history(reg, old_out, old_in, new_out, new_in)
 
                 # ---------------------------
-                # 🚗 AVAILABILITY LOGIC (unchanged)
+                # 🚗 AVAILABILITY LOGIC
                 # ---------------------------
                 hire_out = result.get("hire_vehicle_date_out")
                 hire_in = result.get("hire_vehicle_date_in")
                 hire_reg = result.get("hire_vehicle_reg")
 
+                # NEW LOGIC: If both dates were null before and now both are provided together → don't make available
+                was_both_null = (old_out is None and old_in is None)
+                is_now_both_present = (hire_out is not None and hire_in is not None)
+
                 if hire_out and hire_in:
                     self.update_claim_status(claim_id, "hire end")
-                    if hire_reg:
-                        self.update_is_available(hire_reg, True)
+
+                    # Don't mark car available if it was a new complete hire (both dates at once)
+                    if not (was_both_null and is_now_both_present):
+                        if hire_reg:
+                            self.update_is_available(hire_reg, True)
+
                 elif hire_out:
                     self.update_claim_status(claim_id, "hire start")
                     if hire_reg:
                         self.update_is_available(hire_reg, False)
 
-                change_history = result.get("change_vehicle_history")
-                if change_history:
-                    if isinstance(change_history, str):
-                        change_history = json.loads(change_history)
-
-                    for change in change_history:
+                # ---------------------------
+                # 🔁 CHANGE VEHICLE AVAILABILITY LOGIC (with new rule)
+                # ---------------------------
+                if new_history:
+                    for change in new_history:
                         reg = change.get("vehicle_reg")
                         out_date = change.get("date_out")
                         in_date = change.get("date_in")
@@ -473,21 +483,26 @@ class ClaimFormQueries:
                         if not reg:
                             continue
 
+                        # NEW LOGIC for change history:
+                        # If there was NO previous entry AND we are adding both date_out + date_in together
+                        # → Do NOT mark the car as available
+                        old_entry = old_map.get((reg, out_date), {})
+                        was_no_previous_entry = (old_entry.get("date_out") is None and old_entry.get("date_in") is None)
+                        is_complete_hire_now = (out_date is not None and in_date is not None)
+
                         if out_date and in_date:
-                            self.update_is_available(reg, True)
+                            if not (was_no_previous_entry and is_complete_hire_now):
+                                self.update_is_available(reg, True)
                         elif out_date:
                             self.update_is_available(reg, False)
 
                 self.conn.commit()
                 return result
 
-            return None
-
         except Exception as e:
             print(f"Error in upsert_rental_agreement: {e}")
             self.conn.rollback()
             return None
-
     def upsert_claim_documents(self, claim_id: str, documents: dict) -> None:
         query = """
         INSERT INTO claim_documents (claim_id, documents)
