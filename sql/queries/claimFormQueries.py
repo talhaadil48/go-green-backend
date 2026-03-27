@@ -1908,3 +1908,16 @@ class ClaimFormQueries:
 
             col_names = [desc[0] for desc in cur.description]
             return [dict(zip(col_names, row)) for row in rows]
+
+
+    def update_ref_no(self, claim_id: str, ref_no: str) -> dict | None:
+        with self.conn.cursor(cursor_factory=RealDictCursor) as cur:
+            query = """
+                UPDATE claims
+                SET ref_no = %s
+                WHERE claim_id = %s
+                RETURNING *;
+            """
+            cur.execute(query, (ref_no, claim_id))
+            self.conn.commit()
+            return cur.fetchone()

@@ -1651,3 +1651,33 @@ async def get_all_fleet_history():
         "count": len(history),
         "data": history
     }
+
+
+@router.put("/claims/ref-no/{claim_id}")
+async def update_ref_no(
+    claim_id: str,
+    request: Request
+) -> Dict[str, Any]:
+
+    try:
+        data = await request.json()
+    except Exception:
+        raise HTTPException(status_code=400, detail="Invalid JSON")
+
+    ref_no = data.get("ref_no")
+
+    if not ref_no:
+        raise HTTPException(status_code=400, detail="ref_no is required")
+
+    conn = DBConnection.get_connection()
+    queries = Queries(conn)
+
+    result = queries.update_ref_no(claim_id, ref_no)
+
+    if not result:
+        raise HTTPException(status_code=404, detail="Claim not found")
+
+    return {
+        "claim_id": claim_id,
+        "ref_no": ref_no
+    }
