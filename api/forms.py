@@ -21,6 +21,9 @@ class DailyRateUpdate(BaseModel):
     daily_rate: float
 
 
+class PaymentUpdate(BaseModel):
+    payment: str
+    pay_date: str
 class ClaimLockUpdate(BaseModel):
     locked: bool
     locked_by: Optional[str] = None
@@ -648,7 +651,7 @@ async def soft_delete_claim(claim_id: str, request: SoftDeleteClaimRequest):
 
 
 
-@router.put("/claims/{claim_id}/close")
+@router.put("//{claim_id}/close")
 async def close_claim(claim_id: str, request: CloseClaimRequest):
     conn = DBConnection.get_connection()
     queries = Queries(conn)
@@ -1598,6 +1601,7 @@ async def get_claim_summary(claim_id: str):
 
 
 
+
 # --- UPDATE LOCK STATUS ---
 @router.put("/claims/{claim_id}/lock", response_model=None)
 async def update_claim_lock(
@@ -1681,3 +1685,17 @@ async def update_ref_no(
         "claim_id": claim_id,
         "ref_no": ref_no
     }
+
+
+
+@router.put("/claims/{claim_id}/payment")
+async def update_payment_details(claim_id: str, payment_update: PaymentUpdate):
+    conn = DBConnection.get_connection()
+    queries = Queries(conn)
+
+    updated = queries.update_payment_details(claim_id, payment_update.payment, payment_update.pay_date)
+
+    if not updated:
+        raise HTTPException(status_code=404, detail="Claim not found")
+
+    return {"message": "Payment details updated successfully"}

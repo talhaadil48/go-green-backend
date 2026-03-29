@@ -672,12 +672,8 @@ class ClaimFormQueries:
                 i.invoice_datetime,
                 i.info,
 
-                -- final hire end date (max of both)
-                GREATEST(
-                    ra.hire_vehicle_date_in,
-                    ra.latest_history_date
-                ) AS hire_end_date
-
+                ra.hire_vehicle_date_in as hire_end_date,
+                ra.hire_vehicle_date_out as hire_start_date
             FROM claims c
 
             LEFT JOIN (
@@ -695,14 +691,8 @@ class ClaimFormQueries:
                 SELECT
                     claim_id,
                     hire_vehicle_date_in,
-
-                    -- get latest date_out from JSON, ignore empty strings
-                    (
-                        SELECT MAX(NULLIF(elem->>'date_out','')::date)
-                        FROM jsonb_array_elements(change_vehicle_history::jsonb) elem
-                        WHERE (elem->>'date_out') IS NOT NULL
-                    ) AS latest_history_date
-
+                    hire_vehicle_date_out
+                
                 FROM rental_agreements
             ) ra
             ON c.claim_id = ra.claim_id
@@ -837,6 +827,7 @@ class ClaimFormQueries:
 ) -> int:
         if 'Rental Agreement' in docs:
             self.update_claim_status(claim_id, "invoice sent")
+            self.update_invoice_date(claim_id, datetime.now())
         query = """
             INSERT INTO invoice (claim_id, info, docs, storage_bill, rent_bill, user_name)
             VALUES (%s, %s, %s, %s, %s, %s)
@@ -1921,3 +1912,38 @@ class ClaimFormQueries:
             cur.execute(query, (ref_no, claim_id))
             self.conn.commit()
             return cur.fetchone()
+        
+
+    def update_payment_details(self, claim_id: str, payment: str, pay_date: str) -> dict | None:
+        query = """
+            UPDATE claims
+            SET payment = %s,
+                pay_date = %s
+            WHERE claim_id = %s
+            RETURNING *;
+        """
+        with self.conn.cursor() as cur:
+            cur.execute(query, (payment, pay_date, claim_id))
+            self.conn.commit()
+            row = cur.fetchone()
+            if row:
+                columns = [desc[0] for desc in cur.description]
+                self.update_claim_status(claim_id, "client paid")
+                return dict(zip(columns, row))
+        return None
+    
+    def update_invoice_date(self, claim_id: str, invoice_date: str) -> dict | None:
+        query = """
+            UPDATE claims
+            SET invoice_date = %s
+            WHERE claim_id = %s
+            RETURNING *;
+        """
+        with self.conn.cursor() as cur:
+            cur.execute(query, (invoice_date, claim_id))
+            self.conn.commit()
+            row = cur.fetchone()
+            if row:
+                columns = [desc[0] for desc in cur.description]
+                return dict(zip(columns, row))
+        return None
