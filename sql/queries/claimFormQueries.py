@@ -278,18 +278,33 @@ class ClaimFormQueries:
             self.conn.rollback()
             return False
         
-    def update_claimant_name(self, claim_id: str, new_name: str) -> bool:
-        query = """
+    def update_claim(self, claim_id: str, claimant_name: str = None, council: str = None) -> bool:
+        fields = []
+        values = []
+
+        if claimant_name is not None:
+            fields.append("claimant_name = %s")
+            values.append(claimant_name)
+
+        if council is not None:
+            fields.append("council = %s")
+            values.append(council)
+
+        if not fields:
+            return False
+
+        query = f"""
             UPDATE claims
-            SET claimant_name = %s
+            SET {', '.join(fields)}
             WHERE claim_id = %s;
         """
+
+        values.append(claim_id)
+
         with self.conn.cursor() as cur:
-            cur.execute(query, (new_name, claim_id))
+            cur.execute(query, tuple(values))
             self.conn.commit()
-            return cur.rowcount > 0  # True if any row was updated
-
-
+            return cur.rowcount > 0
 
     def upsert_rental_agreement(self, claim_id: str, data: dict) -> dict | None:
 

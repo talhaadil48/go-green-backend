@@ -843,30 +843,37 @@ async def get_invoices(claim_id: str):
     
 
 @router.put("/claims/{claim_id}")
-async def update_claimant_name(claim_id: str, payload: Dict[str, Any]):
+async def update_claim(claim_id: str, payload: Dict[str, Any]):
     conn = DBConnection.get_connection()
     queries = Queries(conn)
 
-    new_name = payload.get("claimant_name")
-    if not new_name:
+    claimant_name = payload.get("claimant_name")
+    council = payload.get("council")
+
+    if claimant_name is None and council is None:
         raise HTTPException(
             status_code=400,
-            detail="claimant_name is required"
+            detail="At least one field (claimant_name or council) is required"
         )
 
     try:
-        updated = queries.update_claimant_name(claim_id=claim_id, new_name=new_name)
+        updated = queries.update_claim(
+            claim_id=claim_id,
+            claimant_name=claimant_name,
+            council=council
+        )
+
         if not updated:
             raise HTTPException(
                 status_code=404,
                 detail=f"Claim with id {claim_id} not found"
             )
+
     except Exception as e:
         conn.rollback()
         raise HTTPException(status_code=500, detail=str(e))
 
-    return {"message": "Claimant name updated successfully", "claim_id": claim_id}
-
+    return {"message": "Claim updated successfully", "claim_id": claim_id}
 
 
 @router.post("/car")
