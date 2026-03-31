@@ -286,7 +286,17 @@ class ClaimFormQueries:
             self.conn.rollback()
             return False
         
-    def update_claim(self, claim_id: str, claimant_name: str = None, council: str = None, claim_type: str = None) -> bool:
+    def update_claim(
+        self,
+        claim_id: str,
+        claimant_name: str = None,
+        council: str = None,
+        claim_type: str = None,
+        pay_date: str = None,
+        claim_start_date: str = None,
+        invoice_date: str = None
+    ) -> bool:
+
         fields = []
         values = []
 
@@ -302,6 +312,18 @@ class ClaimFormQueries:
             fields.append("claim_type = %s")
             values.append(claim_type)
 
+        if pay_date is not None:
+            fields.append("pay_date = %s")
+            values.append(pay_date)
+
+        if claim_start_date is not None:
+            fields.append("claim_start_date = %s")
+            values.append(claim_start_date)
+
+        if invoice_date is not None:
+            fields.append("invoice_date = %s")
+            values.append(invoice_date)
+
         if not fields:
             return False
 
@@ -316,9 +338,8 @@ class ClaimFormQueries:
         with self.conn.cursor() as cur:
             cur.execute(query, tuple(values))
             self.conn.commit()
-            return cur.rowcount > 0
-        
-        
+            return cur.rowcount > 0    
+
     def upsert_rental_agreement(self, claim_id: str, data: dict) -> dict | None:
 
         def get_existing_rental():
@@ -1989,6 +2010,7 @@ class ClaimFormQueries:
 
             col_names = [desc[0] for desc in cur.description]
             return [dict(zip(col_names, row)) for row in rows]
+        
 
 
     def update_ref_no(self, claim_id: str, ref_no: str) -> dict | None:
@@ -2004,24 +2026,45 @@ class ClaimFormQueries:
             return cur.fetchone()
         
 
+            
     def update_payment_details(self, claim_id: str, payment: str, pay_date: str) -> dict | None:
-        query = """
-            UPDATE claims
-            SET payment = %s,
-                pay_date = %s
-            WHERE claim_id = %s
-            RETURNING *;
-        """
         with self.conn.cursor() as cur:
+            # 1. Get old pay_date
+            cur.execute(
+                "SELECT pay_date FROM claims WHERE claim_id = %s;",
+                (claim_id,)
+            )
+            old = cur.fetchone()
+            if not old:
+                return None
+
+            old_pay_date = old[0]
+
+            # 2. Update payment + pay_date
+            query = """
+                UPDATE claims
+                SET payment = %s,
+                    pay_date = %s
+                WHERE claim_id = %s
+                RETURNING *;
+            """
             cur.execute(query, (payment, pay_date, claim_id))
             self.conn.commit()
+
             row = cur.fetchone()
             if row:
                 columns = [desc[0] for desc in cur.description]
-                self.update_claim_status(claim_id, "client paid")
+
+                # 3. Only update status if previously NULL and now set
+                if old_pay_date is None and pay_date is not None:
+                    self.update_claim_status(claim_id, "client paid")
+
                 return dict(zip(columns, row))
-        return None
+
+        return None    
     
+
+
     def update_invoice_date(self, claim_id: str, invoice_date: str) -> dict | None:
         query = """
             UPDATE claims
@@ -2060,3 +2103,39 @@ class ClaimFormQueries:
         except Exception as e:
             print(f"Error in get_user_by_id: {e}")
             return None
+
+        
+
+    def update_hire_vehicle_dates(self, claim_id: str, date_in: str = None, date_out: str = None) -> dict | None:
+        if date_in is None and date_out is None:
+            return None
+
+        params = {
+            "claim_id": claim_id,
+            "date_in": date_in,
+            "date_out": date_out
+        }
+
+        query = """
+            INSERT INTO rental_agreements (claim_id, hire_vehicle_date_in, hire_vehicle_date_out)
+            VALUES (%(claim_id)s, %(date_in)s, %(date_out)s)
+            ON CONFLICT (claim_id)
+            DO UPDATE SET
+                hire_vehicle_date_in = COALESCE(EXCLUDED.hire_vehicle_date_in, rental_agreements.hire_vehicle_date_in),
+                hire_vehicle_date_out = COALESCE(EXCLUDED.hire_vehicle_date_out, rental_agreements.hire_vehicle_date_out)
+            RETURNING *;
+        """
+
+        try:
+            with self.conn.cursor() as cur:
+                cur.execute(query, params)
+                row = cur.fetchone()
+                if row:
+                    self.conn.commit()
+                    columns = [desc[0] for desc in cur.description]
+                    return dict(zip(columns, row))
+            return None
+        except Exception as e:
+            print(f"Error updating hire vehicle dates: {e}")
+            self.conn.rollback()
+            return None 

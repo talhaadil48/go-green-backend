@@ -16,6 +16,14 @@ security = HTTPBearer(
     scheme_name="Bearer",
     description="JWT Authorization header using the Bearer scheme"
 )
+
+
+
+class HireVehicleDatesUpdate(BaseModel):
+    date_in: Optional[str] = None
+    date_out: Optional[str] = None
+
+
 class DailyRateUpdate(BaseModel):
     car_id: int
     daily_rate: float
@@ -850,11 +858,21 @@ async def update_claim(claim_id: str, payload: Dict[str, Any]):
     claimant_name = payload.get("claimant_name")
     council = payload.get("council")
     claim_type = payload.get("claim_type")
+    pay_date = payload.get("pay_date")
+    claim_start_date = payload.get("claim_start_date")
+    invoice_date = payload.get("invoice_date")
 
-    if claimant_name is None and council is None and claim_type is None:
+    if (
+        claimant_name is None and
+        council is None and
+        claim_type is None and
+        pay_date is None and
+        claim_start_date is None and
+        invoice_date is None
+    ):
         raise HTTPException(
             status_code=400,
-            detail="At least one field (claimant_name, council, claim_type) is required"
+            detail="At least one field must be provided"
         )
 
     try:
@@ -862,7 +880,10 @@ async def update_claim(claim_id: str, payload: Dict[str, Any]):
             claim_id=claim_id,
             claimant_name=claimant_name,
             council=council,
-            claim_type=claim_type
+            claim_type=claim_type,
+            pay_date=pay_date,
+            claim_start_date=claim_start_date,
+            invoice_date=invoice_date
         )
 
         if not updated:
@@ -876,6 +897,9 @@ async def update_claim(claim_id: str, payload: Dict[str, Any]):
         raise HTTPException(status_code=500, detail=str(e))
 
     return {"message": "Claim updated successfully", "claim_id": claim_id}
+
+
+
 
 @router.post("/car")
 async def create_car(payload: CarCreate):
@@ -1707,3 +1731,21 @@ async def update_payment_details(claim_id: str, payment_update: PaymentUpdate):
         raise HTTPException(status_code=404, detail="Claim not found")
 
     return {"message": "Payment details updated successfully"}
+
+
+
+@router.put("/claims/{claim_id}/hire-vehicle-dates")
+async def update_hire_vehicle_dates(claim_id: str, payload: HireVehicleDatesUpdate):
+    conn = DBConnection.get_connection()
+    queries = Queries(conn)
+
+    updated = queries.update_hire_vehicle_dates(
+        claim_id,
+        payload.date_in,
+        payload.date_out
+    )
+
+    if not updated:
+        raise HTTPException(status_code=404, detail="Claim not found")
+
+    return {"message": "Hire vehicle dates updated successfully"}
