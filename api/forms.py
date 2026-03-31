@@ -128,7 +128,7 @@ def get_current_user(
     token = credentials.credentials
 
     # ← REPLACE with your actual token validation logic
-    payload = decode_token(token)          # your function
+    payload = decode_token(token)          
 
     if not payload:
         raise HTTPException(

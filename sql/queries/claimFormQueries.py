@@ -8,6 +8,14 @@ from decimal import Decimal
 import inspect
 from fastapi import HTTPException
 import json
+from datetime import datetime
+
+def parse_date(d):
+    if d and isinstance(d, str) and d.strip():  # non-empty string
+        return datetime.strptime(d, "%Y-%m-%d").date()
+    elif isinstance(d, datetime):
+        return d.date()
+    return None  # for None, empty string, or other invalid
 
 class ClaimFormQueries:
     def __init__(self, conn):
@@ -486,6 +494,42 @@ class ClaimFormQueries:
                     if hire_reg:
                         self.update_is_available(hire_reg, False)
 
+
+                # Combine hire vehicle info and change history into a single list
+                # Convert dates when building all_entries
+                all_entries = []
+
+                if hire_out or hire_in:
+                    all_entries.append({
+                        "vehicle_reg": hire_reg,
+                        "date_out": parse_date(hire_out),
+                        "date_in": parse_date(hire_in)
+                    })
+
+                for change in new_history:
+                    reg = change.get("vehicle_reg")
+                    out_date = parse_date(change.get("date_out"))
+                    in_date = parse_date(change.get("date_in"))
+                    if reg and (out_date or in_date):
+                        all_entries.append({
+                            "vehicle_reg": reg,
+                            "date_out": out_date,
+                            "date_in": in_date
+                        })
+
+                latest_entry = max(
+                    (e for e in all_entries if e.get("date_out")),
+                    key=lambda x: x["date_out"],
+                    default=None
+                )
+
+                # Update claim status based on latest entry
+                if latest_entry:
+                    if latest_entry.get("date_out") and not latest_entry.get("date_in"):
+                        self.update_claim_status(claim_id, "hire start")
+                    elif latest_entry.get("date_out") and latest_entry.get("date_in"):
+                        self.update_claim_status(claim_id, "hire end")
+
                 # ---------------------------
                 # 🔁 CHANGE VEHICLE AVAILABILITY LOGIC (with new rule)
                 # ---------------------------
@@ -518,6 +562,8 @@ class ClaimFormQueries:
             print(f"Error in upsert_rental_agreement: {e}")
             self.conn.rollback()
             return None
+        
+        
     def upsert_claim_documents(self, claim_id: str, documents: dict) -> None:
         query = """
         INSERT INTO claim_documents (claim_id, documents)
@@ -676,7 +722,7 @@ class ClaimFormQueries:
                 columns = [desc[0] for desc in cur.description]
                 return dict(zip(columns, row))
         return None
-
+    
     def get_all_claims(self) -> list[dict]:
         query = """
             SELECT
@@ -687,8 +733,40 @@ class ClaimFormQueries:
                 i.invoice_datetime,
                 i.info,
 
-                ra.hire_vehicle_date_in as hire_end_date,
-                ra.hire_vehicle_date_out as hire_start_date
+                -- hire_end_date: latest of hire_vehicle_date_in and JSON date_in
+                CASE
+                    WHEN ra.hire_vehicle_date_in IS NOT NULL
+                        AND EXISTS (
+                            SELECT 1
+                            FROM jsonb_array_elements(ra.change_vehicle_history::jsonb) AS j
+                            WHERE NULLIF(j->>'date_out','') IS NOT NULL
+                        )
+                        AND NOT EXISTS (
+                            SELECT 1
+                            FROM jsonb_array_elements(ra.change_vehicle_history::jsonb) AS j
+                            WHERE NULLIF(j->>'date_in','') IS NOT NULL
+                        )
+                    THEN NULL
+                    ELSE GREATEST(
+                        ra.hire_vehicle_date_in,
+                        (
+                            SELECT MAX((NULLIF(j->>'date_in',''))::date)
+                            FROM jsonb_array_elements(ra.change_vehicle_history::jsonb) AS j
+                            WHERE NULLIF(j->>'date_in','') IS NOT NULL
+                        )
+                    )
+                END AS hire_end_date,
+
+                -- hire_start_date: earliest of hire_vehicle_date_out and JSON date_out
+                LEAST(
+                    ra.hire_vehicle_date_out,
+                    (
+                        SELECT MIN((NULLIF(j->>'date_out',''))::date)
+                        FROM jsonb_array_elements(ra.change_vehicle_history::jsonb) AS j
+                        WHERE NULLIF(j->>'date_out','') IS NOT NULL
+                    )
+                ) AS hire_start_date
+
             FROM claims c
 
             LEFT JOIN (
@@ -702,14 +780,7 @@ class ClaimFormQueries:
             ) i
             ON c.claim_id = i.claim_id
 
-            LEFT JOIN (
-                SELECT
-                    claim_id,
-                    hire_vehicle_date_in,
-                    hire_vehicle_date_out
-                
-                FROM rental_agreements
-            ) ra
+            LEFT JOIN rental_agreements ra
             ON c.claim_id = ra.claim_id
 
             WHERE c.recently_deleted = FALSE;
@@ -720,7 +791,6 @@ class ClaimFormQueries:
             rows = cur.fetchall()
             columns = [desc[0] for desc in cur.description]
             return [dict(zip(columns, row)) for row in rows]
-        
 
     def get_claim_by_id(self, claim_id: str) -> dict | None:
         query = "SELECT * FROM claims WHERE claim_id = %s;"
@@ -1962,3 +2032,26 @@ class ClaimFormQueries:
                 columns = [desc[0] for desc in cur.description]
                 return dict(zip(columns, row))
         return None
+    
+        
+    def get_user_by_id(self, user_id: str) -> dict | None:
+        query = """
+        SELECT id, username, role, permissions
+        FROM users
+        WHERE id = %(user_id)s;
+        """
+
+        try:
+            with self.conn.cursor() as cur:
+                cur.execute(query, {"user_id": user_id})
+                row = cur.fetchone()
+
+                if row:
+                    columns = [desc[0] for desc in cur.description]
+                    return dict(zip(columns, row))
+
+            return None
+
+        except Exception as e:
+            print(f"Error in get_user_by_id: {e}")
+            return None
