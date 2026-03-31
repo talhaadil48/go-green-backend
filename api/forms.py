@@ -849,18 +849,20 @@ async def update_claim(claim_id: str, payload: Dict[str, Any]):
 
     claimant_name = payload.get("claimant_name")
     council = payload.get("council")
+    claim_type = payload.get("claim_type")
 
-    if claimant_name is None and council is None:
+    if claimant_name is None and council is None and claim_type is None:
         raise HTTPException(
             status_code=400,
-            detail="At least one field (claimant_name or council) is required"
+            detail="At least one field (claimant_name, council, claim_type) is required"
         )
 
     try:
         updated = queries.update_claim(
             claim_id=claim_id,
             claimant_name=claimant_name,
-            council=council
+            council=council,
+            claim_type=claim_type
         )
 
         if not updated:
@@ -874,7 +876,6 @@ async def update_claim(claim_id: str, payload: Dict[str, Any]):
         raise HTTPException(status_code=500, detail=str(e))
 
     return {"message": "Claim updated successfully", "claim_id": claim_id}
-
 
 @router.post("/car")
 async def create_car(payload: CarCreate):

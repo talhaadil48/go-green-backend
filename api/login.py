@@ -1,4 +1,4 @@
-from fastapi import APIRouter, HTTPException, status
+from fastapi import APIRouter, HTTPException, Query, status
 from sql.combinedQueries import Queries
 from db.connection import DBConnection
 from utils.hashing import verify_password
@@ -43,17 +43,14 @@ async def login_user(username: str, password: str):
 
 
 
-# --- Request Model ---
-class RefreshRequest(BaseModel):
-    refresh_token: str
-
+    
 
 @router.post("/refresh")
-async def refresh_access_token(req: RefreshRequest):
+async def refresh_access_token(refresh_token: str = Query(...)):
     conn = DBConnection.get_connection()
     queries = Queries(conn)
 
-    payload = decode_token(req.refresh_token)
+    payload = decode_token(refresh_token)
 
     if not payload:
         raise HTTPException(
@@ -74,7 +71,6 @@ async def refresh_access_token(req: RefreshRequest):
             detail="Invalid token payload"
         )
 
-    # ✅ Fetch user from DB
     user = queries.get_user_by_id(user_id)
 
     if not user:
@@ -83,7 +79,6 @@ async def refresh_access_token(req: RefreshRequest):
             detail="User not found"
         )
 
-    # ✅ Create FULL access token
     new_access_token = create_access_token({
         "sub": str(user["id"]),
         "username": user["username"],
@@ -91,7 +86,6 @@ async def refresh_access_token(req: RefreshRequest):
         "permissions": user.get("permissions", {})
     })
 
-    # ✅ Create refresh token (minimal is fine)
     new_refresh_token = create_refresh_token({
         "sub": str(user["id"])
     })

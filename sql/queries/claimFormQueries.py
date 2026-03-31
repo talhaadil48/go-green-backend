@@ -286,7 +286,7 @@ class ClaimFormQueries:
             self.conn.rollback()
             return False
         
-    def update_claim(self, claim_id: str, claimant_name: str = None, council: str = None) -> bool:
+    def update_claim(self, claim_id: str, claimant_name: str = None, council: str = None, claim_type: str = None) -> bool:
         fields = []
         values = []
 
@@ -297,6 +297,10 @@ class ClaimFormQueries:
         if council is not None:
             fields.append("council = %s")
             values.append(council)
+
+        if claim_type is not None:
+            fields.append("claim_type = %s")
+            values.append(claim_type)
 
         if not fields:
             return False
@@ -313,7 +317,8 @@ class ClaimFormQueries:
             cur.execute(query, tuple(values))
             self.conn.commit()
             return cur.rowcount > 0
-
+        
+        
     def upsert_rental_agreement(self, claim_id: str, data: dict) -> dict | None:
 
         def get_existing_rental():
