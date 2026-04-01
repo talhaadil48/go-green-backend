@@ -83,6 +83,7 @@ class CarUpdate(BaseModel):
     model: Optional[str] = None
     name: Optional[str] = None
     reg_no: Optional[str] = None
+    service_time: Optional[str] = None
 
 class ClaimantCreate(BaseModel):
     claimant_id: Optional[str] = None
@@ -958,7 +959,8 @@ async def update_car(car_id: int, payload: CarUpdate):
             car_id,
             payload.model,
             payload.name,
-            payload.reg_no
+            payload.reg_no,
+            payload.service_time
         )
     except Exception as e:
         conn.rollback()
@@ -971,7 +973,6 @@ async def update_car(car_id: int, payload: CarUpdate):
         "success": True,
         "message": "Car updated successfully"
     }
-
 
 @router.get("/car/{car_id}")
 async def get_car_by_id(car_id: int):

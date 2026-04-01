@@ -341,7 +341,6 @@ class ClaimFormQueries:
             return cur.rowcount > 0    
 
     def upsert_rental_agreement(self, claim_id: str, data: dict) -> dict | None:
-
         def get_existing_rental():
             query = """
                 SELECT
@@ -366,28 +365,37 @@ class ClaimFormQueries:
 
                 return result
 
-        def handle_fleet_history(reg, old_out, old_in, new_out, new_in):
+        def handle_fleet_history(reg, old_out, old_in, new_out, new_in, miles_out_val, miles_in_val):
             # invalid case
             if new_in and not new_out:
                 return
 
             # prevent changing date_out
             if old_out and new_out and old_out != new_out:
+                print("CASE")
                 return
+            
 
             # CASE 1: both null → insert
             if not old_out and not old_in:
                 if new_out and not new_in:
-                    self.insert_fleet_history(new_out, None, claim_id, reg)
+                    self.insert_fleet_history(new_out, None, claim_id, reg, miles_in_val, miles_out_val)
                 elif new_out and new_in:
-                    self.insert_fleet_history(new_out, new_in, claim_id, reg)
+                    self.insert_fleet_history(new_out, new_in, claim_id, reg, miles_in_val, miles_out_val)
 
             # CASE 2: out exists, in null → update
             elif old_out and not old_in:
                 if new_out and new_in:
-                    self.update_fleet_history_hire_end(new_in, claim_id, reg, old_out)
+                    self.update_fleet_history_hire_end(new_in, claim_id, reg, old_out, miles_in_val, miles_out_val)
 
             # CASE 3: both exist → do nothing
+
+            elif old_out and old_in:
+                print("CASE 3")
+                print(f"old_out: {old_out}, old_in: {old_in}, new_out: {new_out}, new_in: {new_in}")
+                print("miles_in_val", miles_in_val, "miles_out_val", miles_out_val)
+                print("reg", reg)
+                self.update_fleet_history_hire_end(old_in, claim_id, reg, old_out, miles_in_val, miles_out_val)
 
         existing = get_existing_rental()
 
@@ -463,10 +471,13 @@ class ClaimFormQueries:
                 new_out = result.get("hire_vehicle_date_out")
                 new_in = result.get("hire_vehicle_date_in")
                 reg = result.get("hire_vehicle_reg")
+                
+                # Fetch miles out and in from the result
+                miles_out_val = result.get("hire_vehicle_miles_out")
+                miles_in_val = result.get("hire_vehicle_miles_in")
 
                 if reg:
-                    handle_fleet_history(reg, old_out, old_in, new_out, new_in)
-
+                    handle_fleet_history(reg, old_out, old_in, new_out, new_in, miles_out_val, miles_in_val)
                 # ---------------------------
                 # 🔁 CHANGE VEHICLE HISTORY
                 # ---------------------------
@@ -493,8 +504,10 @@ class ClaimFormQueries:
                     old = old_map.get((reg, new_out), {})
                     old_out = old.get("date_out")
                     old_in = old.get("date_in")
+                    miles_in = change.get("miles_in")
+                    miles_out = change.get("miles_out")
 
-                    handle_fleet_history(reg, old_out, old_in, new_out, new_in)
+                    handle_fleet_history(reg, old_out, old_in, new_out, new_in, miles_out, miles_in)
 
                 # ---------------------------
                 # 🚗 AVAILABILITY LOGIC
@@ -1127,15 +1140,15 @@ class ClaimFormQueries:
             self.conn.rollback()
             raise e
 
-    def update_car(self, car_id, model, name, reg_no) -> bool:
+    def update_car(self, car_id, model, name, reg_no, service_time) -> bool:
         try:
             query = """
                 UPDATE cars
-                SET model=%s, name=%s, reg_no=%s
+                SET model=%s, name=%s, reg_no=%s, service_time=%s
                 WHERE id=%s
             """
             with self.conn.cursor() as cur:
-                cur.execute(query, (model, name, reg_no, car_id))
+                cur.execute(query, (model, name, reg_no, service_time, car_id))
             self.conn.commit()
             return True
         except psycopg2.errors.UniqueViolation:
@@ -1144,42 +1157,71 @@ class ClaimFormQueries:
         except Exception as e:
             self.conn.rollback()
             raise e
+        
 
     def get_car_by_id(self, car_id: int):
         query = "SELECT * FROM cars WHERE id=%s"
         with self.conn.cursor(cursor_factory=RealDictCursor) as cur:
             cur.execute(query, (car_id,))
             return cur.fetchone()
-
+        
 
     def get_all_cars(self):
         with self.conn.cursor(cursor_factory=RealDictCursor) as cur:
             cur.execute("""
                 SELECT 
                     c.*,
-                    ra.claim_id AS current_holder_claim_id
+                    ra.claim_id AS current_holder_claim_id,
+                    fh.miles_list
                 FROM cars c
+
                 LEFT JOIN LATERAL (
                     SELECT r.claim_id
                     FROM rental_agreements r
-                    WHERE (r.hire_vehicle_reg = c.reg_no 
-                            AND r.hire_vehicle_date_out IS NOT NULL 
-                            AND r.hire_vehicle_date_in IS NULL)
+                    WHERE (
+                        r.hire_vehicle_reg = c.reg_no 
+                        AND r.hire_vehicle_date_out IS NOT NULL 
+                        AND r.hire_vehicle_date_in IS NULL
+                    )
                     OR EXISTS (
-                            SELECT 1
-                            FROM jsonb_array_elements(r.change_vehicle_history) AS ch
-                            WHERE ch->>'vehicle_reg' = c.reg_no
-                            AND ch->>'date_out' IS NOT NULL
-                            AND (ch->>'date_in' = '' or ch->>'date_in' IS NULL)
+                        SELECT 1
+                        FROM jsonb_array_elements(r.change_vehicle_history) AS ch
+                        WHERE ch->>'vehicle_reg' = c.reg_no
+                        AND ch->>'date_out' IS NOT NULL
+                        AND (ch->>'date_in' = '' OR ch->>'date_in' IS NULL)
                     )
                     ORDER BY r.rental_agreement_id DESC
                     LIMIT 1
                 ) ra ON TRUE
+
+                LEFT JOIN LATERAL (
+                    SELECT ARRAY_AGG(f.miles_in) AS miles_list
+                    FROM fleet_history f
+                    WHERE f.car_reg = c.reg_no
+                ) fh ON TRUE
+
                 ORDER BY c.id ASC
             """)
-            return cur.fetchall()
+
+            cars = cur.fetchall()
+
+        # process in python
+        for car in cars:
+            miles_list = car.get("miles_list") or []
+
+            valid_miles = []
+
+            for m in miles_list:
+                try:
+                    if m is not None and str(m).isdigit():
+                        valid_miles.append(int(m))
+                except:
+                    pass
+
+            car["last_miles_in"] = max(valid_miles) if valid_miles else None
 
 
+        return cars
     def get_free_cars(self):
         query = "SELECT * FROM cars WHERE is_long_hire = FALSE ORDER BY id ASC"
         with self.conn.cursor(cursor_factory=RealDictCursor) as cur:
@@ -1995,32 +2037,58 @@ class ClaimFormQueries:
             cur.execute(query, (locked, locked_by, claim_id))
         self.conn.commit()
 
-    def insert_fleet_history(self, hire_start: str, hire_end: str, claim_id: str, car_reg: str):
-        query = """
-            INSERT INTO fleet_history (hire_start, hire_end, claim_id, car_reg)
-            VALUES (%s, %s, %s, %s);
-        """
-        with self.conn.cursor() as cur:
-            cur.execute(query, (hire_start, hire_end, claim_id, car_reg))
-        self.conn.commit()
-
-    def update_fleet_history_hire_end(
+    def insert_fleet_history(
     self,
+    hire_start: str,
     hire_end: str,
     claim_id: str,
     car_reg: str,
-    hire_start: str
+    miles_in: str,
+    miles_out: str
 ):
+        if miles_in == '':
+            miles_in = None
+        if miles_out == '':
+            miles_out = None
+        query = """
+            INSERT INTO fleet_history 
+            (hire_start, hire_end, claim_id, car_reg, miles_in, miles_out)
+            VALUES (%s, %s, %s, %s, %s, %s);
+        """
+        with self.conn.cursor() as cur:
+            cur.execute(query, (hire_start, hire_end, claim_id, car_reg, miles_in, miles_out))
+        self.conn.commit()
+
+
+    def update_fleet_history_hire_end(
+        self,
+        hire_end: str,
+        claim_id: str,
+        car_reg: str,
+        hire_start: str,
+        miles_in: str,
+        miles_out: str
+    ):
+        
+        if miles_in == '':
+            miles_in = None
+        if miles_out == '':
+            miles_out = None
         query = """
             UPDATE fleet_history
-            SET hire_end = %s
+            SET hire_end = %s,
+                miles_in = %s,
+                miles_out = %s
             WHERE claim_id = %s
             AND car_reg = %s
             AND hire_start = %s;
         """
         with self.conn.cursor() as cur:
-            cur.execute(query, (hire_end, claim_id, car_reg, hire_start))
+            cur.execute(query, (hire_end, miles_in, miles_out, claim_id, car_reg, hire_start))
         self.conn.commit()
+
+
+    
 
 
     def get_all_fleet_history(self) -> list[dict]:
