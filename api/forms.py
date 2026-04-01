@@ -30,8 +30,11 @@ class DailyRateUpdate(BaseModel):
 
 
 class PaymentUpdate(BaseModel):
-    payment: str
-    pay_date: str
+    payment: Optional[str] = None
+    pay_date: Optional[str] = None
+
+
+
 class ClaimLockUpdate(BaseModel):
     locked: bool
     locked_by: Optional[str] = None
@@ -1735,7 +1738,11 @@ async def update_payment_details(claim_id: str, payment_update: PaymentUpdate):
     conn = DBConnection.get_connection()
     queries = Queries(conn)
 
-    updated = queries.update_payment_details(claim_id, payment_update.payment, payment_update.pay_date)
+    updated = queries.update_payment_details(
+        claim_id,
+        payment_update.payment,
+        payment_update.pay_date
+    )
 
     if not updated:
         raise HTTPException(status_code=404, detail="Claim not found")

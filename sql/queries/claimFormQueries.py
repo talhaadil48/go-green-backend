@@ -2055,43 +2055,55 @@ class ClaimFormQueries:
         
 
             
-    def update_payment_details(self, claim_id: str, payment: str, pay_date: str) -> dict | None:
+
+    def update_payment_details(self, claim_id: str, payment: str | None, pay_date: str | None) -> dict | None:
         with self.conn.cursor() as cur:
-            # 1. Get old pay_date
+            # 1. Get old values
             cur.execute(
-                "SELECT pay_date FROM claims WHERE claim_id = %s;",
+                "SELECT payment, pay_date FROM claims WHERE claim_id = %s;",
                 (claim_id,)
             )
             old = cur.fetchone()
             if not old:
                 return None
 
-            old_pay_date = old[0]
+            old_payment, old_pay_date = old
 
-            # 2. Update payment + pay_date
-            query = """
+            # 2. Build dynamic update query
+            fields = []
+            values = []
+
+            if payment is not None:
+                fields.append("payment = %s")
+                values.append(payment)
+            if pay_date is not None:
+                fields.append("pay_date = %s")
+                values.append(pay_date)
+
+            if not fields:
+                return None  # Nothing to update
+
+            values.append(claim_id)
+            query = f"""
                 UPDATE claims
-                SET payment = %s,
-                    pay_date = %s
+                SET {', '.join(fields)}
                 WHERE claim_id = %s
                 RETURNING *;
             """
-            cur.execute(query, (payment, pay_date, claim_id))
+            cur.execute(query, tuple(values))
             self.conn.commit()
 
             row = cur.fetchone()
             if row:
                 columns = [desc[0] for desc in cur.description]
 
-                # 3. Only update status if previously NULL and now set
+                # 3. Update status if pay_date was previously NULL and now set
                 if old_pay_date is None and pay_date is not None:
                     self.update_claim_status(claim_id, "client paid")
 
                 return dict(zip(columns, row))
 
-        return None    
-    
-
+        return None
 
     def update_invoice_date(self, claim_id: str, invoice_date: str) -> dict | None:
         query = """
