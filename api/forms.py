@@ -121,7 +121,8 @@ class InvoiceUpdate(BaseModel):
     storage_bill: float | None = None
     rent_bill: float | None = None
     user_name: str | None = None
-
+    payment_date: str | None = None
+    payment_amount: str | None = None
 
 
 def get_current_user(
@@ -659,7 +660,7 @@ async def soft_delete_claim(claim_id: str, request: SoftDeleteClaimRequest):
 
 
 
-@router.put("//{claim_id}/close")
+@router.put("/claims/{claim_id}/close")
 async def close_claim(claim_id: str, request: CloseClaimRequest):
     conn = DBConnection.get_connection()
     queries = Queries(conn)
@@ -797,8 +798,13 @@ async def create_invoice(data: InvoiceCreate):
         "invoice_id": invoice_id
     }
 
+
 @router.put("/invoice/{invoice_id}")
-async def update_invoice(invoice_id: int, data: InvoiceUpdate):
+async def update_invoice(
+    invoice_id: int,
+    data: InvoiceUpdate,
+    current_user: CurrentUser = Depends(get_current_user)
+):
     conn = DBConnection.get_connection()
     queries = Queries(conn)
 
@@ -807,7 +813,10 @@ async def update_invoice(invoice_id: int, data: InvoiceUpdate):
         data.info,
         data.storage_bill,
         data.rent_bill,
-        data.user_name
+        data.user_name,
+        data.payment_date,
+        data.payment_amount,
+        current_user.username
     )
 
     if updated_id == 0:
@@ -820,6 +829,7 @@ async def update_invoice(invoice_id: int, data: InvoiceUpdate):
         "success": True,
         "invoice_id": updated_id
     }
+
 
 
 @router.get("/invoice")

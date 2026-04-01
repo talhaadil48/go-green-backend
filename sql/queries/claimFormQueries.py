@@ -963,53 +963,79 @@ class ClaimFormQueries:
             self.conn.rollback()
             return 0
         
+
     def update_invoice(
     self,
     invoice_id: int,
     info=None,
     storage_bill=None,
     rent_bill=None,
-    user_name=None
+    user_name=None,
+    payment_date=None,
+    payment_amount=None,
+    user=None
 ):
-
         fields = []
         values = []
 
-        if info is not None:
-            fields.append("info = %s")
-            values.append(info)
-
-        if storage_bill is not None:
-            fields.append("storage_bill = %s")
-            values.append(storage_bill)
-
-        if rent_bill is not None:
-            fields.append("rent_bill = %s")
-            values.append(rent_bill)
-
-        if user_name is not None:
-            fields.append("user_name = %s")
-            values.append(user_name)
-
-        if not fields:
-            return 0
-
-        query = f"""
-            UPDATE invoice
-            SET {", ".join(fields)}
-            WHERE id = %s
-            RETURNING id;
-        """
-
-        values.append(invoice_id)
-
         try:
             with self.conn.cursor() as cur:
+                # 🔹 Get previous payment_date + claim_id
+                cur.execute(
+                    "SELECT payment_date, claim_id FROM invoice WHERE id = %s",
+                    (invoice_id,)
+                )
+                prev = cur.fetchone()
+
+                old_payment_date = prev[0] if prev else None
+                claimId = prev[1] if prev else None   # ✅ saved
+
+                if info is not None:
+                    fields.append("info = %s")
+                    values.append(info)
+
+                if storage_bill is not None:
+                    fields.append("storage_bill = %s")
+                    values.append(storage_bill)
+
+                if rent_bill is not None:
+                    fields.append("rent_bill = %s")
+                    values.append(rent_bill)
+
+                if user_name is not None:
+                    fields.append("user_name = %s")
+                    values.append(user_name)
+
+                if payment_date is not None:
+                    fields.append("payment_date = %s")
+                    values.append(payment_date)
+
+                if payment_amount is not None:
+                    fields.append("payment_amount = %s")
+                    values.append(payment_amount)
+
+                if not fields:
+                    return 0
+
+                query = f"""
+                    UPDATE invoice
+                    SET {", ".join(fields)}
+                    WHERE id = %s
+                    RETURNING id, payment_date;
+                """
+
+                values.append(invoice_id)
+
                 cur.execute(query, values)
                 result = cur.fetchone()
 
                 if result is None:
                     return 0
+
+                new_payment_date = result[1]
+
+                if old_payment_date is None and new_payment_date is not None:
+                    self.close_claim(claimId, user, 'Invoice payment recorded')
 
                 self.conn.commit()
                 return result[0]
@@ -1018,7 +1044,7 @@ class ClaimFormQueries:
             print(f"Error updating invoice: {e}")
             self.conn.rollback()
             return 0
-
+                
     def get_all_invoices(self):
         query = """
             SELECT 
@@ -1030,7 +1056,9 @@ class ClaimFormQueries:
                 i.docs,
                 i.storage_bill,
                 i.rent_bill,
-                i.user_name
+                i.user_name,
+                i.payment_date,
+                i.payment_amount
             FROM invoice i
             LEFT JOIN claims c ON i.claim_id = c.claim_id
             ORDER BY i.invoice_datetime DESC;
@@ -1048,7 +1076,7 @@ class ClaimFormQueries:
     def get_invoices_by_claim_id(self, claim_id: str):
         query = """
             SELECT id, claim_id, invoice_datetime, info,
-            docs, storage_bill, rent_bill, user_name
+            docs, storage_bill, rent_bill, user_name, payment_date, payment_amount
             FROM invoice
             WHERE claim_id = %s
             ORDER BY invoice_datetime DESC;
