@@ -82,7 +82,6 @@ class CarCreate(BaseModel):
 class CarUpdate(BaseModel):
     model: Optional[str] = None
     name: Optional[str] = None
-    reg_no: Optional[str] = None
     service_time: Optional[str] = None
 
 class ClaimantCreate(BaseModel):
@@ -959,7 +958,6 @@ async def update_car(car_id: int, payload: CarUpdate):
             car_id,
             payload.model,
             payload.name,
-            payload.reg_no,
             payload.service_time
         )
     except Exception as e:

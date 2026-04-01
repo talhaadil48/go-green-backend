@@ -1140,15 +1140,15 @@ class ClaimFormQueries:
             self.conn.rollback()
             raise e
 
-    def update_car(self, car_id, model, name, reg_no, service_time) -> bool:
+    def update_car(self, car_id, model, name, service_time) -> bool:
         try:
             query = """
                 UPDATE cars
-                SET model=%s, name=%s, reg_no=%s, service_time=%s
+                SET model=%s, name=%s, service_time=%s
                 WHERE id=%s
             """
             with self.conn.cursor() as cur:
-                cur.execute(query, (model, name, reg_no, service_time, car_id))
+                cur.execute(query, (model, name, service_time, car_id))
             self.conn.commit()
             return True
         except psycopg2.errors.UniqueViolation:
