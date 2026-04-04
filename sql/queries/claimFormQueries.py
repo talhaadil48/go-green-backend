@@ -595,6 +595,7 @@ class ClaimFormQueries:
                             self.update_is_available(reg, False)
 
                 self.conn.commit()
+                self.refresh_rental_agreements_view()
                 return result
 
         except Exception as e:
@@ -764,65 +765,31 @@ class ClaimFormQueries:
     
     def get_all_claims(self) -> list[dict]:
         query = """
-            SELECT
-                c.*,
-                
-                -- latest invoice
-                i.id AS invoice_id,
-                i.invoice_datetime,
-                i.info,
-
-                -- hire_end_date: latest of hire_vehicle_date_in and JSON date_in
-                CASE
-                    WHEN ra.hire_vehicle_date_in IS NOT NULL
-                        AND EXISTS (
-                            SELECT 1
-                            FROM jsonb_array_elements(ra.change_vehicle_history::jsonb) AS j
-                            WHERE NULLIF(j->>'date_out','') IS NOT NULL
-                        )
-                        AND NOT EXISTS (
-                            SELECT 1
-                            FROM jsonb_array_elements(ra.change_vehicle_history::jsonb) AS j
-                            WHERE NULLIF(j->>'date_in','') IS NOT NULL
-                        )
-                    THEN NULL
-                    ELSE GREATEST(
-                        ra.hire_vehicle_date_in,
-                        (
-                            SELECT MAX((NULLIF(j->>'date_in',''))::date)
-                            FROM jsonb_array_elements(ra.change_vehicle_history::jsonb) AS j
-                            WHERE NULLIF(j->>'date_in','') IS NOT NULL
-                        )
-                    )
-                END AS hire_end_date,
-
-                -- hire_start_date: earliest of hire_vehicle_date_out and JSON date_out
-                LEAST(
-                    ra.hire_vehicle_date_out,
-                    (
-                        SELECT MIN((NULLIF(j->>'date_out',''))::date)
-                        FROM jsonb_array_elements(ra.change_vehicle_history::jsonb) AS j
-                        WHERE NULLIF(j->>'date_out','') IS NOT NULL
-                    )
-                ) AS hire_start_date
-
-            FROM claims c
-
-            LEFT JOIN (
-                SELECT DISTINCT ON (claim_id)
-                    id,
-                    claim_id,
-                    invoice_datetime,
-                    info
-                FROM invoice
-                ORDER BY claim_id, invoice_datetime DESC
-            ) i
-            ON c.claim_id = i.claim_id
-
-            LEFT JOIN rental_agreements ra
-            ON c.claim_id = ra.claim_id
-
-            WHERE c.recently_deleted = FALSE;
+        WITH latest_invoice AS (
+            SELECT DISTINCT ON (claim_id)
+                id AS invoice_id,
+                claim_id,
+                invoice_datetime,
+                info
+            FROM invoice
+            ORDER BY claim_id, invoice_datetime DESC
+        )
+        SELECT
+            c.*,
+            i.invoice_id,
+            i.invoice_datetime,
+            i.info,
+            CASE
+                WHEN ra.hire_vehicle_date_in IS NOT NULL
+                    AND ra.max_date_in IS NULL
+                THEN NULL
+                ELSE GREATEST(ra.hire_vehicle_date_in, ra.max_date_in)
+            END AS hire_end_date,
+            LEAST(ra.hire_vehicle_date_out, ra.min_date_out) AS hire_start_date
+        FROM claims c
+        LEFT JOIN latest_invoice i ON c.claim_id = i.claim_id
+        LEFT JOIN rental_agreements_mv ra ON c.claim_id = ra.claim_id
+        WHERE c.recently_deleted = FALSE;
         """
 
         with self.conn.cursor() as cur:
@@ -830,7 +797,9 @@ class ClaimFormQueries:
             rows = cur.fetchall()
             columns = [desc[0] for desc in cur.description]
             return [dict(zip(columns, row)) for row in rows]
+        
 
+        
     def get_claim_by_id(self, claim_id: str) -> dict | None:
         query = "SELECT * FROM claims WHERE claim_id = %s;"
         with self.conn.cursor() as cur:
@@ -2240,6 +2209,7 @@ class ClaimFormQueries:
                 row = cur.fetchone()
                 if row:
                     self.conn.commit()
+                    self.refresh_rental_agreements_view()
                     columns = [desc[0] for desc in cur.description]
                     return dict(zip(columns, row))
             return None
@@ -2247,3 +2217,12 @@ class ClaimFormQueries:
             print(f"Error updating hire vehicle dates: {e}")
             self.conn.rollback()
             return None 
+        
+    def refresh_rental_agreements_view(self):
+        try:
+            with self.conn.cursor() as cur:
+                cur.execute("REFRESH MATERIALIZED VIEW CONCURRENTLY rental_agreements_mv;")
+            self.conn.commit()
+        except Exception as e:
+            print(f"Error refreshing materialized view: {e}")
+            self.conn.rollback()
