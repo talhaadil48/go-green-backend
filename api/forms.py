@@ -1452,26 +1452,34 @@ async def update_claim_status_api(claim_id: str, payload: Dict[str, str]):
 
 
 
-
 @router.put("/claims/{claim_id}/disputed")
-async def update_claim_disputed_api(claim_id: str, payload: Dict[str, bool]):
+async def update_claim_disputed_api(claim_id: str, payload: Dict[str, Any]):
     conn = DBConnection.get_connection()
     queries = Queries(conn)
 
     is_disputed = payload.get("is_disputed")
-    if is_disputed is None:
-        raise HTTPException(status_code=400, detail="is_disputed is required and must be true or false")
+    dispute_reason = payload.get("dispute_reason")
+
+    if is_disputed is None and dispute_reason is None:
+        raise HTTPException(
+            status_code=400,
+            detail="At least one of is_disputed or dispute_reason is required"
+        )
 
     try:
-        updated = queries.update_claim_disputed(claim_id, is_disputed)
+        updated = queries.update_claim_disputed(claim_id, is_disputed, dispute_reason)
         if not updated:
             raise HTTPException(status_code=404, detail="claim_id not found")
     except Exception as e:
         conn.rollback()
         raise HTTPException(status_code=500, detail=str(e))
 
-    return {"message": "Disputed status updated successfully", "claim_id": claim_id, "is_disputed": is_disputed}
-
+    return {
+        "message": "Claim updated successfully",
+        "claim_id": claim_id,
+        "is_disputed": is_disputed,
+        "dispute_reason": dispute_reason
+    }
 
 
 

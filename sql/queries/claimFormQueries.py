@@ -1772,19 +1772,36 @@ class ClaimFormQueries:
             self.conn.commit()
         return True
     
-    def update_claim_disputed(self, claim_id: str, is_disputed: bool) -> bool:
-        query = """
+    def update_claim_disputed(self, claim_id: str, is_disputed=None, dispute_reason=None) -> bool:
+        fields = []
+        values = []
+
+        if is_disputed is not None:
+            fields.append("is_disputed = %s")
+            values.append(is_disputed)
+
+        if dispute_reason is not None:
+            fields.append("dispute_reason = %s")
+            values.append(dispute_reason)
+
+        if not fields:
+            return False
+
+        query = f"""
             UPDATE claims
-            SET is_disputed = %s
+            SET {', '.join(fields)}
             WHERE claim_id = %s;
         """
+
+        values.append(claim_id)
+
         with self.conn.cursor() as cur:
-            cur.execute(query, (is_disputed, claim_id))
+            cur.execute(query, tuple(values))
             if cur.rowcount == 0:
                 return False
             self.conn.commit()
-        return True
 
+        return True
 
     def get_rental_by_claim(self, claim_id: str) -> dict | None:
         query = """
@@ -1951,7 +1968,7 @@ class ClaimFormQueries:
             # 1. Basic claim info
             cur.execute("""
                 SELECT claim_id, claimant_name, claim_type, claim_start_date, status, 
-                    closed_date, closed_by, recently_deleted
+                    closed_date, closed_by, recently_deleted , is_disputed, dispute_reason
                 FROM claims 
                 WHERE claim_id = %s;
             """, (claim_id,))
