@@ -1771,6 +1771,19 @@ class ClaimFormQueries:
                 return False  # claim_id not found
             self.conn.commit()
         return True
+    
+    def update_claim_disputed(self, claim_id: str, is_disputed: bool) -> bool:
+        query = """
+            UPDATE claims
+            SET is_disputed = %s
+            WHERE claim_id = %s;
+        """
+        with self.conn.cursor() as cur:
+            cur.execute(query, (is_disputed, claim_id))
+            if cur.rowcount == 0:
+                return False
+            self.conn.commit()
+        return True
 
 
     def get_rental_by_claim(self, claim_id: str) -> dict | None:

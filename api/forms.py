@@ -1452,6 +1452,29 @@ async def update_claim_status_api(claim_id: str, payload: Dict[str, str]):
 
 
 
+
+@router.put("/claims/{claim_id}/disputed")
+async def update_claim_disputed_api(claim_id: str, payload: Dict[str, bool]):
+    conn = DBConnection.get_connection()
+    queries = Queries(conn)
+
+    is_disputed = payload.get("is_disputed")
+    if is_disputed is None:
+        raise HTTPException(status_code=400, detail="is_disputed is required and must be true or false")
+
+    try:
+        updated = queries.update_claim_disputed(claim_id, is_disputed)
+        if not updated:
+            raise HTTPException(status_code=404, detail="claim_id not found")
+    except Exception as e:
+        conn.rollback()
+        raise HTTPException(status_code=500, detail=str(e))
+
+    return {"message": "Disputed status updated successfully", "claim_id": claim_id, "is_disputed": is_disputed}
+
+
+
+
 @router.get("/claim-bill/{claim_id}")
 async def get_claim_bill(claim_id: str) -> Dict[str, Any]:
     conn = DBConnection.get_connection()
