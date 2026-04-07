@@ -4,7 +4,6 @@ from jose.exceptions import ExpiredSignatureError, JWTError
 from pathlib import Path
 from dotenv import load_dotenv
 import os   
-# Load .env.local
 BASE_DIR = Path(__file__).resolve().parent.parent
 ENV_PATH = BASE_DIR / ".env.local"
 load_dotenv(dotenv_path=ENV_PATH)
@@ -26,6 +25,7 @@ def create_access_token(data: dict, expires_delta: timedelta | None = None) -> s
         "type": "access"
     })
     
+
     return jwt.encode(to_encode, SECRET_KEY, algorithm=ALGORITHM)
 
 def create_refresh_token(data: dict):
