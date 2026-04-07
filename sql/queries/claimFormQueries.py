@@ -2291,3 +2291,56 @@ class ClaimFormQueries:
         except Exception as e:
             print(f"Error refreshing materialized view: {e}")
             self.conn.rollback()
+
+
+
+    def add_update(self, claim_id: str, new_update: dict) -> bool:
+        query = """
+            UPDATE claims
+            SET updates = COALESCE(updates, '[]'::jsonb) || %s::jsonb
+            WHERE claim_id = %s;
+        """
+        with self.conn.cursor() as cur:
+            cur.execute(query, (json.dumps([new_update]), claim_id))
+            self.conn.commit()
+            return cur.rowcount > 0
+        
+
+    def edit_update(self, claim_id: str, update_id: int, new_data: dict) -> bool:
+        select_query = "SELECT updates FROM claims WHERE claim_id = %s;"
+        update_query = "UPDATE claims SET updates = %s WHERE claim_id = %s;"
+
+        with self.conn.cursor() as cur:
+            cur.execute(select_query, (claim_id,))
+            row = cur.fetchone()
+
+            if not row or not row[0]:
+                return False
+
+            updates = row[0]
+
+            found = False
+            for i, item in enumerate(updates):
+                if item.get("id") == update_id:
+                    updates[i] = {**item, **new_data}
+                    found = True
+                    break
+
+            if not found:
+                return False
+
+            cur.execute(update_query, (json.dumps(updates), claim_id))
+            self.conn.commit()
+            return True
+        
+    def get_updates(self, claim_id: str) -> list[dict]:
+        query = "SELECT updates FROM claims WHERE claim_id = %s;"
+
+        with self.conn.cursor() as cur:
+            cur.execute(query, (claim_id,))
+            row = cur.fetchone()
+
+            if not row or not row[0]:
+                return []
+
+            return row[0]

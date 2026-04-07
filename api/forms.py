@@ -1796,3 +1796,59 @@ async def update_hire_vehicle_dates(claim_id: str, payload: HireVehicleDatesUpda
         raise HTTPException(status_code=404, detail="Claim not found")
 
     return {"message": "Hire vehicle dates updated successfully"}
+
+
+
+
+@router.post("/claims/{claim_id}/updates")
+async def add_update(claim_id: str, payload: dict):
+    conn = DBConnection.get_connection()
+    queries = Queries(conn)
+
+    new_update = payload.get("update")
+
+    if not new_update:
+        raise HTTPException(status_code=400, detail="update is required")
+
+    required_fields = ["id", "message", "date", "user"]
+    for field in required_fields:
+        if field not in new_update:
+            raise HTTPException(status_code=400, detail=f"{field} is required")
+
+    updated = queries.add_update(claim_id, new_update)
+
+    if not updated:
+        raise HTTPException(status_code=404, detail="Claim not found")
+
+    return {"message": "Update added successfully"}
+
+@router.put("/claims/{claim_id}/updates/{update_id}")
+async def edit_update(claim_id: str, update_id: int, payload: dict):
+    conn = DBConnection.get_connection()
+    queries = Queries(conn)
+
+    new_data = payload.get("update")
+
+    if not new_data:
+        raise HTTPException(status_code=400, detail="update is required")
+
+    updated = queries.edit_update(claim_id, update_id, new_data)
+
+    if not updated:
+        raise HTTPException(status_code=404, detail="Update not found")
+
+    return {"message": "Update edited successfully"}
+
+
+
+@router.get("/claims/{claim_id}/updates")
+async def get_updates(claim_id: str):
+    conn = DBConnection.get_connection()
+    queries = Queries(conn)
+
+    updates = queries.get_updates(claim_id)
+
+    return {
+        "count": len(updates),
+        "data": updates
+    }
