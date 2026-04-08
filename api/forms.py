@@ -1001,6 +1001,18 @@ async def get_all_cars():
     }
 
 
+@router.get("/cars/count")
+async def get_non_long_hire_cars_count():
+    conn = DBConnection.get_connection()
+    queries = Queries(conn)
+
+    count = queries.get_non_long_hire_cars_count()
+
+    return {
+        "success": True,
+        "count": count
+    }
+
 
 @router.get("/cars/free")
 async def get_free_cars():

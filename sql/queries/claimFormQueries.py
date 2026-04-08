@@ -1226,12 +1226,23 @@ class ClaimFormQueries:
 
 
         return cars
+    
+
     def get_free_cars(self):
         query = "SELECT * FROM cars WHERE is_long_hire = FALSE ORDER BY id ASC"
         with self.conn.cursor(cursor_factory=RealDictCursor) as cur:
             cur.execute(query)
             return cur.fetchall()
-    
+        
+    def get_non_long_hire_cars_count(self):
+        with self.conn.cursor() as cur:
+            cur.execute("""
+                SELECT COUNT(*)
+                FROM cars
+                WHERE is_long_hire = FALSE
+            """)
+            return cur.fetchone()[0]
+        
         
     def get_available_cars(self):
         query = """
