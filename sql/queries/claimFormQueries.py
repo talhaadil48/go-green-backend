@@ -285,44 +285,13 @@ class ClaimFormQueries:
             print(f"Error in delete_claim: {e}")
             self.conn.rollback()
             return False
-        
-    def update_claim(
-        self,
-        claim_id: str,
-        claimant_name: str = None,
-        council: str = None,
-        claim_type: str = None,
-        pay_date: str = None,
-        claim_start_date: str = None,
-        invoice_date: str = None
-    ) -> bool:
-
+    def update_claim_dynamic(self, claim_id: str, update_data: Dict[str, Any]) -> bool:
         fields = []
         values = []
 
-        if claimant_name is not None:
-            fields.append("claimant_name = %s")
-            values.append(claimant_name)
-
-        if council is not None:
-            fields.append("council = %s")
-            values.append(council)
-
-        if claim_type is not None:
-            fields.append("claim_type = %s")
-            values.append(claim_type)
-
-        if pay_date is not None:
-            fields.append("pay_date = %s")
-            values.append(pay_date)
-
-        if claim_start_date is not None:
-            fields.append("claim_start_date = %s")
-            values.append(claim_start_date)
-
-        if invoice_date is not None:
-            fields.append("invoice_date = %s")
-            values.append(invoice_date)
+        for field, value in update_data.items():
+            fields.append(f"{field} = %s")
+            values.append(value)  # psycopg2 automatically converts None -> NULL
 
         if not fields:
             return False
@@ -332,13 +301,12 @@ class ClaimFormQueries:
             SET {', '.join(fields)}
             WHERE claim_id = %s;
         """
-
         values.append(claim_id)
 
         with self.conn.cursor() as cur:
             cur.execute(query, tuple(values))
             self.conn.commit()
-            return cur.rowcount > 0    
+            return cur.rowcount > 0
 
     def upsert_rental_agreement(self, claim_id: str, data: dict) -> dict | None:
         def get_existing_rental():
@@ -1125,18 +1093,21 @@ class ClaimFormQueries:
             print(f"Error in change_user_password: {e}")
             self.conn.rollback()
             return False
-
-    def insert_car(self, model, name, reg_no) -> bool:
+ 
+ 
+ 
+    def insert_car(self, model, name, reg_no, attributes=None) -> bool:
         try:
             query = """
-                INSERT INTO cars (model, name, reg_no)
-                VALUES (%s, %s, %s)
+                INSERT INTO cars (model, name, reg_no, attributes)
+                VALUES (%s, %s, %s, %s)
             """
+            if attributes is None:
+                attributes = []
             with self.conn.cursor() as cur:
-                cur.execute(query, (model, name, reg_no))
+                cur.execute(query, (model, name, reg_no, attributes))
             self.conn.commit()
             return True
-        
         except psycopg2.errors.UniqueViolation:
             self.conn.rollback()
             raise Exception("Car with this registration number already exists")
@@ -1144,15 +1115,19 @@ class ClaimFormQueries:
             self.conn.rollback()
             raise e
 
-    def update_car(self, car_id, model, name, service_time) -> bool:
+
+
+    def update_car(self, car_id, model, name, service_time, attributes=None) -> bool:
         try:
             query = """
                 UPDATE cars
-                SET model=%s, name=%s, service_time=%s
+                SET model=%s, name=%s, service_time=%s, attributes=%s
                 WHERE id=%s
             """
+            if attributes is None:
+                attributes = []
             with self.conn.cursor() as cur:
-                cur.execute(query, (model, name, service_time, car_id))
+                cur.execute(query, (model, name, service_time, attributes, car_id))
             self.conn.commit()
             return True
         except psycopg2.errors.UniqueViolation:
@@ -1161,7 +1136,7 @@ class ClaimFormQueries:
         except Exception as e:
             self.conn.rollback()
             raise e
-        
+
 
     def get_car_by_id(self, car_id: int):
         query = "SELECT * FROM cars WHERE id=%s"
@@ -2257,25 +2232,27 @@ class ClaimFormQueries:
             print(f"Error in get_user_by_id: {e}")
             return None
 
-        
-
     def update_hire_vehicle_dates(self, claim_id: str, date_in: str = None, date_out: str = None) -> dict | None:
-        if date_in is None and date_out is None:
+        fields = []
+        params = {"claim_id": claim_id}
+
+        if "date_in" in locals():
+            fields.append("hire_vehicle_date_in = %(date_in)s")
+            params["date_in"] = date_in  # None will become NULL in Postgres
+
+        if "date_out" in locals():
+            fields.append("hire_vehicle_date_out = %(date_out)s")
+            params["date_out"] = date_out
+
+        if not fields:
             return None
 
-        params = {
-            "claim_id": claim_id,
-            "date_in": date_in,
-            "date_out": date_out
-        }
-
-        query = """
+        query = f"""
             INSERT INTO rental_agreements (claim_id, hire_vehicle_date_in, hire_vehicle_date_out)
             VALUES (%(claim_id)s, %(date_in)s, %(date_out)s)
             ON CONFLICT (claim_id)
             DO UPDATE SET
-                hire_vehicle_date_in = COALESCE(EXCLUDED.hire_vehicle_date_in, rental_agreements.hire_vehicle_date_in),
-                hire_vehicle_date_out = COALESCE(EXCLUDED.hire_vehicle_date_out, rental_agreements.hire_vehicle_date_out)
+                {', '.join(fields)}
             RETURNING *;
         """
 
@@ -2292,8 +2269,12 @@ class ClaimFormQueries:
         except Exception as e:
             print(f"Error updating hire vehicle dates: {e}")
             self.conn.rollback()
-            return None 
+            return None
         
+
+
+
+
     def refresh_rental_agreements_view(self):
         try:
             with self.conn.cursor() as cur:

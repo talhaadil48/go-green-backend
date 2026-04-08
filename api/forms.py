@@ -78,12 +78,12 @@ class CarCreate(BaseModel):
     model: Optional[str] = None
     name: Optional[str] = None
     reg_no: Optional[str] = None
-
+    attributes: Optional[List[str]] = []
 class CarUpdate(BaseModel):
     model: Optional[str] = None
     name: Optional[str] = None
     service_time: Optional[str] = None
-
+    attributes : Optional[List[str]] = []
 class ClaimantCreate(BaseModel):
     claimant_id: Optional[str] = None
     ref_no: Optional[str] = None
@@ -863,41 +863,24 @@ async def get_invoices(claim_id: str):
     }
     
 
+
 @router.put("/claims/{claim_id}")
 async def update_claim(claim_id: str, payload: Dict[str, Any]):
     conn = DBConnection.get_connection()
     queries = Queries(conn)
 
-    claimant_name = payload.get("claimant_name")
-    council = payload.get("council")
-    claim_type = payload.get("claim_type")
-    pay_date = payload.get("pay_date")
-    claim_start_date = payload.get("claim_start_date")
-    invoice_date = payload.get("invoice_date")
+    # Only accept valid fields
+    valid_fields = ["claimant_name", "council", "claim_type", "pay_date", "claim_start_date", "invoice_date"]
+    update_data = {k: payload[k] for k in valid_fields if k in payload}
 
-    if (
-        claimant_name is None and
-        council is None and
-        claim_type is None and
-        pay_date is None and
-        claim_start_date is None and
-        invoice_date is None
-    ):
+    if not update_data:
         raise HTTPException(
             status_code=400,
-            detail="At least one field must be provided"
+            detail="At least one valid field must be provided"
         )
 
     try:
-        updated = queries.update_claim(
-            claim_id=claim_id,
-            claimant_name=claimant_name,
-            council=council,
-            claim_type=claim_type,
-            pay_date=pay_date,
-            claim_start_date=claim_start_date,
-            invoice_date=invoice_date
-        )
+        updated = queries.update_claim_dynamic(claim_id, update_data)
 
         if not updated:
             raise HTTPException(
@@ -922,7 +905,8 @@ async def create_car(payload: CarCreate):
         queries.insert_car(
             payload.model,
             payload.name,
-            payload.reg_no
+            payload.reg_no,
+            payload.attributes if payload.attributes is not None else []  # ensure it's a list, even if None
         )
     except Exception as e:
         conn.rollback()
@@ -931,6 +915,34 @@ async def create_car(payload: CarCreate):
         "success": True,
         "message": "Car created successfully"
     }
+
+
+@router.put("/car/{car_id}")
+async def update_car(car_id: int, payload: CarUpdate):
+    conn = DBConnection.get_connection()
+    queries = Queries(conn)
+    try:
+        updated = queries.update_car(
+            car_id,
+            payload.model,
+            payload.name,
+            payload.service_time,
+            payload.attributes if payload.attributes is not None else []  # only update if provided
+        )
+    except Exception as e:
+        conn.rollback()
+        raise HTTPException(status_code=400, detail=str(e))
+
+    if not updated:
+        raise HTTPException(status_code=404, detail="Car not found")
+
+    return {
+        "success": True,
+        "message": "Car updated successfully"
+    }
+
+
+
 
 @router.delete("/car/{car_id}")
 async def delete_car(car_id: str):
@@ -949,28 +961,7 @@ async def delete_car(car_id: str):
             "message": f"No car found with id {car_id}"
         }
 
-@router.put("/car/{car_id}")
-async def update_car(car_id: int, payload: CarUpdate):
-    conn = DBConnection.get_connection()
-    queries = Queries(conn)
-    try:
-        updated = queries.update_car(
-            car_id,
-            payload.model,
-            payload.name,
-            payload.service_time
-        )
-    except Exception as e:
-        conn.rollback()
-        raise HTTPException(status_code=400, detail=str(e))
 
-    if not updated:
-        raise HTTPException(status_code=404, detail="Car not found")
-
-    return {
-        "success": True,
-        "message": "Car updated successfully"
-    }
 
 @router.get("/car/{car_id}")
 async def get_car_by_id(car_id: int):
@@ -1792,11 +1783,13 @@ async def update_payment_details(claim_id: str, payment_update: PaymentUpdate):
     return {"message": "Payment details updated successfully"}
 
 
-
 @router.put("/claims/{claim_id}/hire-vehicle-dates")
 async def update_hire_vehicle_dates(claim_id: str, payload: HireVehicleDatesUpdate):
     conn = DBConnection.get_connection()
     queries = Queries(conn)
+
+    if "date_in" not in payload.dict() and "date_out" not in payload.dict():
+        raise HTTPException(status_code=400, detail="At least one field must be provided")
 
     updated = queries.update_hire_vehicle_dates(
         claim_id,
@@ -1808,7 +1801,6 @@ async def update_hire_vehicle_dates(claim_id: str, payload: HireVehicleDatesUpda
         raise HTTPException(status_code=404, detail="Claim not found")
 
     return {"message": "Hire vehicle dates updated successfully"}
-
 
 
 
