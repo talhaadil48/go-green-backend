@@ -580,3 +580,4 @@ async def upsert_hire_checklist(request: Request) -> Dict[str, Any]:
     }
 
     return response
+

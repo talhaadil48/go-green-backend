@@ -2286,7 +2286,7 @@ class ClaimFormQueries:
 
 
 
-    def add_update(self, claim_id: str, new_update: dict) -> bool:
+    def add_update(self, claim_id: str, new_update: dict, user_id: int) -> bool:
         query = """
             UPDATE claims
             SET updates = COALESCE(updates, '[]'::jsonb) || %s::jsonb
@@ -2295,6 +2295,16 @@ class ClaimFormQueries:
         with self.conn.cursor() as cur:
             cur.execute(query, (json.dumps([new_update]), claim_id))
             self.conn.commit()
+
+            # 👉 extract message safely
+            message = new_update.get("message", "New update added")
+
+            self.broadcast_notification(
+                user_id,
+                claim_id,
+                message
+            )
+
             return cur.rowcount > 0
         
 
@@ -2336,3 +2346,103 @@ class ClaimFormQueries:
                 return []
 
             return row[0]
+        
+
+
+    def broadcast_notification(self, sender_id: int, title: str, message: str) -> bool:
+        try:
+            # 1. Insert the notification and record WHO created it
+            notif_query = """
+                INSERT INTO notifications (created_by, title, message)
+                VALUES (%s, %s, %s) RETURNING id
+            """
+            with self.conn.cursor() as cur:
+                cur.execute(notif_query, (sender_id, title, message))
+                notification_id = cur.fetchone()[0]
+
+            # 2. Link to ALL users. 
+            # If the user is the sender, automatically mark is_read = TRUE so it doesn't notify them.
+            mapping_query = """
+                INSERT INTO user_notifications (notification_id, user_id, is_read)
+                SELECT %s, id, CASE WHEN id = %s THEN TRUE ELSE FALSE END 
+                FROM users
+            """
+            with self.conn.cursor() as cur:
+                cur.execute(mapping_query, (notification_id, sender_id))
+                
+            self.conn.commit()
+            return True
+        except Exception as e:
+            self.conn.rollback()
+            raise e
+        
+        
+    def get_user_notifications(self, user_id: int, unread_only: bool = False):
+        try:
+            query = """
+                SELECT n.id AS notification_id, n.created_by, n.title, n.message, un.is_read, n.created_at 
+                FROM notifications n
+                JOIN user_notifications un ON n.id = un.notification_id
+                WHERE un.user_id = %s
+            """
+
+            if unread_only:
+                query += " AND un.is_read = FALSE"
+
+            query += " ORDER BY n.created_at DESC"
+
+            with self.conn.cursor(cursor_factory=RealDictCursor) as cur:
+                cur.execute(query, (user_id,))
+                return cur.fetchall()
+
+        except Exception as e:
+            self.conn.rollback()   # 🔥 THIS FIXES YOUR SYSTEM
+            print("get_user_notifications ERROR:", e)
+            raise e
+
+    def mark_single_as_read(self, notification_id: int, user_id: int) -> bool:
+        try:
+            query = """
+                UPDATE user_notifications 
+                SET is_read = TRUE 
+                WHERE notification_id = %s AND user_id = %s
+            """
+            with self.conn.cursor() as cur:
+                cur.execute(query, (notification_id, user_id))
+            self.conn.commit()
+            return True
+        except Exception as e:
+            self.conn.rollback()
+            raise e
+
+    def mark_all_as_read(self, user_id: int) -> bool:
+        try:
+            query = """
+                UPDATE user_notifications 
+                SET is_read = TRUE 
+                WHERE user_id = %s AND is_read = FALSE
+            """
+            with self.conn.cursor() as cur:
+                cur.execute(query, (user_id,))
+            self.conn.commit()
+            return True
+        except Exception as e:
+            self.conn.rollback()
+            raise e
+
+    def delete_expired_notifications(self) -> int:
+        try:
+            # CASCADE will automatically delete the linked user_notifications rows
+            query = """
+                DELETE FROM notifications 
+                WHERE created_at < NOW() - INTERVAL '7 days'
+            """
+            with self.conn.cursor() as cur:
+                cur.execute(query)
+                deleted_count = cur.rowcount
+            self.conn.commit()
+            return deleted_count
+        except Exception as e:
+            self.conn.rollback()
+            raise e
+

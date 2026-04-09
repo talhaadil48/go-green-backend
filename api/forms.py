@@ -1,4 +1,4 @@
-from fastapi import APIRouter, HTTPException, Request , Depends
+from fastapi import APIRouter, HTTPException, Request , Depends, Query
 from typing import Dict, Any
 from sql.combinedQueries import Queries
 from db.connection import DBConnection
@@ -16,6 +16,13 @@ security = HTTPBearer(
     scheme_name="Bearer",
     description="JWT Authorization header using the Bearer scheme"
 )
+
+
+# --- PYDANTIC MODEL ---
+class BroadcastCreate(BaseModel):
+    sender_id: int
+    title: str
+    message: str
 
 
 
@@ -1805,7 +1812,11 @@ async def update_hire_vehicle_dates(claim_id: str, payload: HireVehicleDatesUpda
 
 
 @router.post("/claims/{claim_id}/updates")
-async def add_update(claim_id: str, payload: dict):
+async def add_update(
+    claim_id: str,
+    payload: dict,
+    current_user: CurrentUser = Depends(get_current_user)
+):
     conn = DBConnection.get_connection()
     queries = Queries(conn)
 
@@ -1819,12 +1830,15 @@ async def add_update(claim_id: str, payload: dict):
         if field not in new_update:
             raise HTTPException(status_code=400, detail=f"{field} is required")
 
-    updated = queries.add_update(claim_id, new_update)
+
+    updated = queries.add_update(claim_id, new_update , current_user.id)
 
     if not updated:
         raise HTTPException(status_code=404, detail="Claim not found")
 
     return {"message": "Update added successfully"}
+
+
 
 @router.put("/claims/{claim_id}/updates/{update_id}")
 async def edit_update(claim_id: str, update_id: int, payload: dict):
@@ -1855,4 +1869,83 @@ async def get_updates(claim_id: str):
     return {
         "count": len(updates),
         "data": updates
+    }
+
+
+
+
+
+# --- ROUTES ---
+
+@router.post("/notifications/broadcast")
+async def create_broadcast(payload: BroadcastCreate):
+    conn = DBConnection.get_connection()
+    queries = Queries(conn)
+    try:
+        queries.broadcast_notification(
+            payload.sender_id,
+            payload.title,
+            payload.message
+        )
+    except Exception as e:
+        conn.rollback()
+        raise HTTPException(status_code=400, detail=str(e))
+    return {
+        "success": True,
+        "message": "Notification broadcasted successfully"
+    }
+
+@router.get("/notifications/users/{user_id}")
+async def get_notifications(user_id: int, unread_only: bool = Query(False, description="Fetch only unread notifications")):
+    conn = DBConnection.get_connection()
+    queries = Queries(conn)
+    try:
+        data = queries.get_user_notifications(user_id, unread_only)
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return {
+        "success": True,
+        "data": data
+    }
+
+@router.patch("/notifications/{notification_id}/users/{user_id}/read")
+async def mark_single_read(notification_id: int, user_id: int):
+    conn = DBConnection.get_connection()
+    queries = Queries(conn)
+    try:
+        queries.mark_single_as_read(notification_id, user_id)
+    except Exception as e:
+        conn.rollback()
+        raise HTTPException(status_code=400, detail=str(e))
+    return {
+        "success": True,
+        "message": "Notification marked as read"
+    }
+
+@router.patch("/notifications/users/{user_id}/read-all")
+async def mark_all_read(user_id: int):
+    conn = DBConnection.get_connection()
+    queries = Queries(conn)
+    try:
+        queries.mark_all_as_read(user_id)
+    except Exception as e:
+        conn.rollback()
+        raise HTTPException(status_code=400, detail=str(e))
+    return {
+        "success": True,
+        "message": f"All notifications marked as read for user {user_id}"
+    }
+
+@router.delete("/notifications/expired")
+async def clean_expired_notifications():
+    conn = DBConnection.get_connection()
+    queries = Queries(conn)
+    try:
+        deleted_count = queries.delete_expired_notifications()
+    except Exception as e:
+        conn.rollback()
+        raise HTTPException(status_code=400, detail=str(e))
+    return {
+        "success": True,
+        "message": f"Successfully deleted {deleted_count} expired notifications"
     }
