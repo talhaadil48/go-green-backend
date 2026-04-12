@@ -35,14 +35,14 @@ async def _handle_fleet_history(
 
     if not old_out and not old_in:
         if new_out and not new_in:
-            await fh_q.insert_fleet_history(new_out, None, claim_id, reg, miles_in_val, miles_out_val)
+            await fh_q.insert_fleet_history(conn, new_out, None, claim_id, reg, miles_in_val, miles_out_val)
         elif new_out and new_in:
-            await fh_q.insert_fleet_history(new_out, new_in, claim_id, reg, miles_in_val, miles_out_val)
+            await fh_q.insert_fleet_history(conn, new_out, new_in, claim_id, reg, miles_in_val, miles_out_val)
     elif old_out and not old_in:
         if new_out and new_in:
-            await fh_q.update_fleet_history_hire_end(new_in, claim_id, reg, old_out, miles_in_val, miles_out_val)
+            await fh_q.update_fleet_history_hire_end(conn, new_in, claim_id, reg, old_out, miles_in_val, miles_out_val)
     elif old_out and old_in:
-        await fh_q.update_fleet_history_hire_end(old_in, claim_id, reg, old_out, miles_in_val, miles_out_val)
+        await fh_q.update_fleet_history_hire_end(conn, old_in, claim_id, reg, old_out, miles_in_val, miles_out_val)
 
 
 async def upsert_rental_agreement(
