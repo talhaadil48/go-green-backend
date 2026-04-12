@@ -999,7 +999,7 @@ async def get_all_cars():
     }
 
 
-@router.get("/cars/count")
+@router.get("/cars/free/count")
 async def get_non_long_hire_cars_count():
     conn = DBConnection.get_connection()
     queries = Queries(conn)
