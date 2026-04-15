@@ -1872,9 +1872,6 @@ async def get_updates(claim_id: str):
     }
 
 
-
-
-
 # --- ROUTES ---
 
 @router.post("/notifications/broadcast")
@@ -1948,4 +1945,21 @@ async def clean_expired_notifications():
     return {
         "success": True,
         "message": f"Successfully deleted {deleted_count} expired notifications"
+    }
+
+
+
+
+@router.patch("/notifications/users/{user_id}/clear")
+async def clear_all_notifications(user_id: int):
+    conn = DBConnection.get_connection()
+    queries = Queries(conn)
+    try:
+        queries.clear_all_notifications(user_id)
+    except Exception as e:
+        conn.rollback()
+        raise HTTPException(status_code=400, detail=str(e))
+    return {
+        "success": True,
+        "message": "All notifications cleared for user"
     }

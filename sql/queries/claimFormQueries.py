@@ -264,6 +264,7 @@ class ClaimFormQueries:
         """
         with self.conn.cursor() as cur:
             cur.execute(query, (claim_id, claimant_name, claim_type, council))
+            self.insert_invoice(claim_id)
             self.conn.commit()
         return True
     
@@ -913,42 +914,63 @@ class ClaimFormQueries:
             return 0
         
     def insert_invoice(
-    self,
-    claim_id: str,
-    info: str,
-    docs: list,
-    storage_bill: float,
-    rent_bill: float,
-    user_name: str
-) -> int:
-        if 'Rental Agreement' in docs:
+        self,
+        claim_id: str,
+        info: str = None,
+        docs: list = None,
+        storage_bill: float = None,
+        rent_bill: float = None,
+        user_name: str = None
+    ) -> int:
+        print(claim_id, info, docs, storage_bill, rent_bill, user_name)
+        if docs and 'Rental Agreement' in docs:
             self.update_claim_status(claim_id, "invoice sent")
-            self.update_invoice_date(claim_id, datetime.now())
-        query = """
-            INSERT INTO invoice (claim_id, info, docs, storage_bill, rent_bill, user_name)
-            VALUES (%s, %s, %s, %s, %s, %s)
+
+        fields = {
+            "claim_id": claim_id,
+            "info": info,
+            "docs": docs,
+            "storage_bill": storage_bill,
+            "rent_bill": rent_bill,
+            "user_name": user_name,
+            "invoice_datetime": datetime.now()   # ALWAYS include
+        }
+
+        # Filter out None values
+        insert_fields = {k: v for k, v in fields.items() if v is not None}
+
+        columns = ", ".join(insert_fields.keys())
+        placeholders = ", ".join(["%s"] * len(insert_fields))
+
+        # This will automatically include "invoice_datetime = EXCLUDED.invoice_datetime"
+        update_fields = [
+            f"{k} = EXCLUDED.{k}"
+            for k in insert_fields.keys()
+            if k != "claim_id"
+        ]
+
+        update_clause = ", ".join(update_fields)
+
+        query = f"""
+            INSERT INTO invoice ({columns})
+            VALUES ({placeholders})
+            ON CONFLICT (claim_id)
+            DO UPDATE SET {update_clause}
             RETURNING id;
         """
 
         try:
             with self.conn.cursor() as cur:
-                cur.execute(query, (
-                    claim_id,
-                    info,
-                    docs,
-                    storage_bill,
-                    rent_bill,
-                    user_name
-                ))
+                cur.execute(query, tuple(insert_fields.values()))
                 invoice_id = cur.fetchone()[0]
                 self.conn.commit()
                 return invoice_id
         except Exception as e:
-            print(f"Error inserting invoice: {e}")
+            print(f"Error inserting/updating invoice: {e}")
             self.conn.rollback()
             return 0
-        
 
+            
     def update_invoice(
     self,
     invoice_id: int,
@@ -1046,6 +1068,7 @@ class ClaimFormQueries:
                 i.payment_amount
             FROM invoice i
             LEFT JOIN claims c ON i.claim_id = c.claim_id
+            WHERE c.recently_deleted = FALSE
             ORDER BY i.invoice_datetime DESC;
         """
         try:
@@ -1055,8 +1078,7 @@ class ClaimFormQueries:
                 return rows
         except Exception as e:
             print(f"Error fetching all invoices: {e}")
-            return []        
-        
+            return []    
 
     def get_invoices_by_claim_id(self, claim_id: str):
         query = """
@@ -2376,13 +2398,22 @@ class ClaimFormQueries:
             self.conn.rollback()
             raise e
         
-        
     def get_user_notifications(self, user_id: int, unread_only: bool = False):
         try:
             query = """
-                SELECT n.id AS notification_id, n.created_by, n.title, n.message, un.is_read, n.created_at 
-                FROM notifications n
-                JOIN user_notifications un ON n.id = un.notification_id
+                SELECT 
+                    n.id AS notification_id,
+                    n.title,
+                    n.message,
+                    n.created_at,
+                    un.is_read,
+                    un.is_cleared,
+                    u.username AS created_by
+                FROM user_notifications un
+                JOIN notifications n 
+                    ON n.id = un.notification_id
+                LEFT JOIN users u 
+                    ON u.id = n.created_by
                 WHERE un.user_id = %s
             """
 
@@ -2396,10 +2427,9 @@ class ClaimFormQueries:
                 return cur.fetchall()
 
         except Exception as e:
-            self.conn.rollback()   # 🔥 THIS FIXES YOUR SYSTEM
+            self.conn.rollback()
             print("get_user_notifications ERROR:", e)
             raise e
-
     def mark_single_as_read(self, notification_id: int, user_id: int) -> bool:
         try:
             query = """
@@ -2445,4 +2475,21 @@ class ClaimFormQueries:
         except Exception as e:
             self.conn.rollback()
             raise e
+        
 
+    def clear_all_notifications(self, user_id: int) -> bool:
+        try:
+            query = """
+                UPDATE user_notifications
+                SET is_cleared = TRUE
+                WHERE user_id = %s AND is_cleared = FALSE
+            """
+            with self.conn.cursor() as cur:
+                cur.execute(query, (user_id,))
+            self.conn.commit()
+            return True
+        except Exception as e:
+            self.conn.rollback()
+            raise e
+
+    
