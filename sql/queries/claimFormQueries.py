@@ -1368,56 +1368,18 @@ class ClaimFormQueries:
         
         
 
-    def update_claimant(
-    self,
-    claimant_id,
-    new_claimant_id=None,
-    ref_no=None,
-    start_date=None,
-    end_date=None,
-    miles=None,
-    name=None,
-    location=None,
-    delivery_charges=None
-    ):
+    def update_claimant(self, claimant_id: int, update_data: dict):
         try:
+            if not update_data:
+                return False
+
             fields = []
             values = []
 
-            if new_claimant_id is not None:
-                fields.append("claimant_id=%s")
-                values.append(new_claimant_id)
-
-            if ref_no is not None:
-                fields.append("ref_no=%s")
-                values.append(ref_no)
-
-            if start_date is not None:
-                fields.append("start_date=%s")
-                values.append(start_date)
-
-            if end_date is not None:
-                fields.append("end_date=%s")
-                values.append(end_date)
-
-            if miles is not None:
-                fields.append("miles=%s")
-                values.append(miles)
-
-            if name is not None:
-                fields.append("name=%s")
-                values.append(name)
-
-            if location is not None:
-                fields.append("location=%s")
-                values.append(location)
-
-            if delivery_charges is not None:
-                fields.append("delivery_charges=%s")
-                values.append(delivery_charges)
-
-            if not fields:
-                return False
+            # Iterate over only the explicitly provided fields
+            for key, value in update_data.items():
+                fields.append(f"{key}=%s")
+                values.append(value)  # If value is None, psycopg2 makes it NULL
 
             query = f"""
                 UPDATE claimant
@@ -1441,8 +1403,7 @@ class ClaimFormQueries:
 
         except Exception as e:
             self.conn.rollback()
-            raise e
-        
+            raise e    
 
 
     def delete_claimant(self, claimant_id: int):
@@ -1455,6 +1416,7 @@ class ClaimFormQueries:
         except Exception as e:
             self.conn.rollback()
             raise e
+        
     def get_claimant(self, claimant_id=None, long_claim_id=None, car_id=None):
         query = "SELECT * FROM claimant WHERE 1=1"
         params = []
@@ -1480,6 +1442,25 @@ class ClaimFormQueries:
         with self.conn.cursor(cursor_factory=RealDictCursor) as cur:
             cur.execute(query)
             return cur.fetchall()
+        
+    def get_long_claims_for_refs(self, ref_nos: list):
+        if not ref_nos:
+            return []
+
+        query = """
+            SELECT 
+                ref_no, 
+                array_agg(DISTINCT long_claim_id) as long_claim_ids
+            FROM claimant 
+            WHERE ref_no = ANY(%s)
+            GROUP BY ref_no
+        """
+
+        with self.conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute(query, (ref_nos,))
+            return cur.fetchall()
+        
+
     # ---------------------- HIRE CHECKLIST ----------------------
   
 

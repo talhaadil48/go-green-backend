@@ -1159,24 +1159,21 @@ async def create_claimant(payload: ClaimantCreate):
 
 
 
-
 @router.put("/claimant/{claimant_id}")
 async def update_claimant(claimant_id: int, payload: ClaimantUpdate):
     conn = DBConnection.get_connection()
     queries = Queries(conn)
 
     try:
-        queries.update_claimant(
-            claimant_id,
-            new_claimant_id=payload.claimant_id,
-            ref_no=payload.ref_no,
-            start_date=payload.start_date,
-            end_date=payload.end_date,
-            miles=payload.miles,
-            name=payload.name,
-            location=payload.location,
-            delivery_charges=payload.delivery_charges
-        )
+        # exclude_unset=True keeps fields explicitly set to `null` 
+        # but ignores fields left completely out of the JSON body.
+        update_data = payload.model_dump(exclude_unset=True)
+
+        # If they sent an empty payload {}
+        if not update_data:
+            return {"success": True, "message": "No updates provided"}
+
+        queries.update_claimant(claimant_id, update_data)
 
         return {
             "success": True,
@@ -1184,10 +1181,33 @@ async def update_claimant(claimant_id: int, payload: ClaimantUpdate):
         }
 
     except ValueError as e:
-        return HTTPException(
+        # Note: You need to raise HTTPException, not return it
+        raise HTTPException(
             status_code=400,
             detail=str(e)
         )
+    
+
+
+@router.get("/claimants/refs/long_claims")
+async def get_long_claims_by_refs(ref_nos: List[str] = Query(..., description="List of reference numbers")):
+    conn = DBConnection.get_connection()
+    queries = Queries(conn)
+
+    # Fetch data from DB
+    raw_data = queries.get_long_claims_for_refs(ref_nos=ref_nos)
+
+    # Transform data into the format: {"1725092": ["LT001", "LT002"], "1722073": ["LT001", "LT002"]}
+    formatted_data = {
+        str(row["ref_no"]): row["long_claim_ids"] 
+        for row in raw_data
+    }
+
+    return {
+        "success": True,
+        "data": formatted_data
+    }
+
 
 @router.delete("/claimant/{claimant_id}")
 async def delete_claimant(claimant_id: int):
