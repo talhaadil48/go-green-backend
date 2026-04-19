@@ -44,7 +44,6 @@ async def login_user(username: str, password: str):
 
 
     
-
 @router.post("/refresh")
 async def refresh_access_token(refresh_token: str = Query(...)):
     conn = DBConnection.get_connection()
@@ -93,5 +92,11 @@ async def refresh_access_token(refresh_token: str = Query(...)):
     return {
         "access_token": new_access_token,
         "refresh_token": new_refresh_token,
-        "token_type": "bearer"
+        "token_type": "bearer",
+        "user": {
+            "id": user["id"],
+            "username": user["username"],
+            "role": user["role"],
+            "permissions": user.get("permissions", {})
+        }
     }

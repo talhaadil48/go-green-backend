@@ -1,139 +1,28 @@
-from fastapi import APIRouter, HTTPException, Request , Depends, Query
-from typing import Dict, Any
+from fastapi import APIRouter, HTTPException, Request, Depends, Query
+from typing import Dict, Any, Optional, List
 from sql.combinedQueries import Queries
 from db.connection import DBConnection
 from utils.hashing import hash_password
 from psycopg2.errors import UniqueViolation
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from pydantic import BaseModel
-from typing import Optional,List
 from utils.jwt_handler import decode_token
 from fastapi import status
-
-
 
 security = HTTPBearer(
     scheme_name="Bearer",
     description="JWT Authorization header using the Bearer scheme"
 )
 
+# -------------------------------------------------------------------
+# USER & AUTHENTICATION DEPENDENCIES
+# -------------------------------------------------------------------
 
-# --- PYDANTIC MODEL ---
-class BroadcastCreate(BaseModel):
-    sender_id: int
-    title: str
-    message: str
-
-
-
-class HireVehicleDatesUpdate(BaseModel):
-    date_in: Optional[str] = None
-    date_out: Optional[str] = None
-
-
-class DailyRateUpdate(BaseModel):
-    car_id: int
-    daily_rate: float
-
-
-class PaymentUpdate(BaseModel):
-    payment: Optional[str] = None
-    pay_date: Optional[str] = None
-
-
-
-class ClaimLockUpdate(BaseModel):
-    locked: bool
-    locked_by: Optional[str] = None
-
-class InvoiceCreate(BaseModel):
-    claim_id: str
-    info: str
-    docs: Optional[List[str]] = []
-    storage_bill: Optional[float] = 0
-    rent_bill: Optional[float] = 0
-    user_name: str
-
-class ChangePasswordRequest(BaseModel):
-    username: str
-    new_password: str
-
-class RegisterUserRequest(BaseModel):
-    username: str
-    password: str
-    role: str
 class CurrentUser(BaseModel):
     id: str
     username: str
     role: str
     permissions: dict = {}
-class LongClaimCreate(BaseModel):
-    starting_date: Optional[str] = None
-    ending_date: Optional[str] = None
-    hirer_name : Optional[str] = None
-
-class LongClaimUpdate(BaseModel):
-    long_claim_id: str
-    starting_date: Optional[str] = None
-    ending_date: Optional[str] = None
-    hirer_name: Optional[str] = None
-
-class LongClaimCarAction(BaseModel):
-    car_id: int
-
-class CarCreate(BaseModel):
-    model: Optional[str] = None
-    name: Optional[str] = None
-    reg_no: Optional[str] = None
-    attributes: Optional[List[str]] = []
-class CarUpdate(BaseModel):
-    model: Optional[str] = None
-    name: Optional[str] = None
-    service_time: Optional[str] = None
-    attributes : Optional[List[str]] = []
-class ClaimantCreate(BaseModel):
-    claimant_id: Optional[str] = None
-    ref_no: Optional[str] = None
-    long_claim_id: str
-    car_id: int
-    start_date: Optional[str] = None
-    end_date: Optional[str] = None
-    miles: Optional[float] = None
-    name: Optional[str] = None
-    location: Optional[str] = None
-    delivery_charges: Optional[float] = 0
-
-class ClaimantUpdate(BaseModel):
-    claimant_id: Optional[str] = None
-    ref_no: Optional[str] = None
-    start_date: Optional[str] = None
-    end_date: Optional[str] = None
-    miles: Optional[float] = None
-    name: Optional[str] = None
-    location: Optional[str] = None
-    delivery_charges: Optional[float] = None
-
-class SoftDeleteClaimRequest(BaseModel):
-    deleted_by: str
-
-class CloseClaimRequest(BaseModel):
-    closed_by: str
-    reason : Optional[str] = None
-
-class LongHireInvoiceCreate(BaseModel):
-    claim_id: str
-    amount: float
-    user_name: str
-
-
-class InvoiceUpdate(BaseModel):
-    info: str | None = None
-    storage_bill: float | None = None
-    rent_bill: float | None = None
-    user_name: str | None = None
-    payment_date: str | None = None
-    payment_amount: str | None = None
-
 
 def get_current_user(
     credentials: HTTPAuthorizationCredentials = Depends(security)
@@ -146,7 +35,7 @@ def get_current_user(
     """
     token = credentials.credentials
 
-    # ← REPLACE with your actual token validation logic
+    # REPLACE with your actual token validation logic
     payload = decode_token(token)          
 
     if not payload:
@@ -156,7 +45,6 @@ def get_current_user(
             headers={"WWW-Authenticate": "Bearer"},
         )
     
-
     return CurrentUser(
         id=payload.get("sub"),
         username=payload.get("username", ""),
@@ -167,8 +55,12 @@ def get_current_user(
 router = APIRouter(
     prefix="/api",
     tags=["claims"],
-    dependencies=[Depends(get_current_user)]          # ← ALL routes protected by default
+    dependencies=[Depends(get_current_user)]  # ALL routes protected by default
 )
+
+# -------------------------------------------------------------------
+# ENDPOINTS
+# -------------------------------------------------------------------
 
 @router.get("/accident-claims/{claim_id}")
 async def get_accident_claim(claim_id: str) -> Dict[str, Any]:
@@ -180,6 +72,7 @@ async def get_accident_claim(claim_id: str) -> Dict[str, Any]:
         raise HTTPException(status_code=404, detail="Accident claim not found")
     
     return {
+        "user_name": result.get("user_name", ""),
         "claim_id": result["claim_id"],
         "checklist_v.d": result.get("checklist_vd"),
         "checklist_pi": result.get("checklist_pi"),
@@ -256,10 +149,6 @@ async def get_accident_claim(claim_id: str) -> Dict[str, Any]:
         "json_after": result.get("json_after")
     }
 
-
-# ────────────────────────────────────────────────
-# 2. Pre-Inspection Form - GET
-# ─────────────────
 @router.get("/pre-inspection-forms/{claim_id}")
 async def get_pre_inspection_form(claim_id: str) -> list[Dict[str, Any]]:
     """
@@ -268,7 +157,7 @@ async def get_pre_inspection_form(claim_id: str) -> list[Dict[str, Any]]:
     conn = DBConnection.get_connection()
     queries = Queries(conn)
    
-    results = queries.get_pre_inspection_form(claim_id)  # Changed to list
+    results = queries.get_pre_inspection_form(claim_id)
    
     response_list = []
     for result in results:
@@ -276,6 +165,7 @@ async def get_pre_inspection_form(claim_id: str) -> list[Dict[str, Any]]:
             f"condition_{i}": result.get(f"condition_{i}", "") for i in range(1, 31)
         }
         response.update({
+            "user_name": result.get("user_name", ""),
             "date": result.get("date", ""),
             "customer": result.get("customer", ""),
             "detailer": result.get("detailer", ""),
@@ -290,15 +180,12 @@ async def get_pre_inspection_form(claim_id: str) -> list[Dict[str, Any]]:
             "base_vehicle_image": result.get("base_vehicle_image"),
             "annotated_vehicle_image": result.get("annotated_vehicle_image"),
             "claim_id": result["claim_id"],
-            "inspection_id": result["inspection_id"],  # NEW
+            "inspection_id": result["inspection_id"],
         })
         response_list.append(response)
     
-    return response_list  # Returns [] if none
+    return response_list
 
-# ────────────────────────────────────────────────
-# 3. Cancellation Form - GET
-# ────────────────────────────────────────────────
 @router.get("/cancellation-forms/{claim_id}")
 async def get_cancellation_form(claim_id: str) -> Dict[str, Any]:
     conn = DBConnection.get_connection()
@@ -309,6 +196,7 @@ async def get_cancellation_form(claim_id: str) -> Dict[str, Any]:
         raise HTTPException(status_code=404, detail="Cancellation form not found")
     
     return {
+        "user_name": result.get("user_name", ""),
         "name": result.get("name", ""),
         "address": result.get("address", ""),
         "postcode": result.get("postcode", ""),
@@ -318,10 +206,6 @@ async def get_cancellation_form(claim_id: str) -> Dict[str, Any]:
         "claim_id": result["claim_id"]
     }
 
-
-# ────────────────────────────────────────────────
-# 4. Storage Form - GET
-# ────────────────────────────────────────────────
 @router.get("/storage-forms/{claim_id}")
 async def get_storage_form(claim_id: str) -> Dict[str, Any]:
     conn = DBConnection.get_connection()
@@ -332,6 +216,7 @@ async def get_storage_form(claim_id: str) -> Dict[str, Any]:
         raise HTTPException(status_code=404, detail="Storage form not found")
     
     return {
+        "user_name": result.get("user_name", ""),
         "name": result.get("name", ""),
         "postcode": result.get("postcode", ""),
         "address1": result.get("address1", ""),
@@ -354,13 +239,9 @@ async def get_storage_form(claim_id: str) -> Dict[str, Any]:
         "client_signature": result.get("client_signature"),
         "owner_signature": result.get("owner_signature"),
         "claim_id": result["claim_id"],
-        "storage_location_key" : result.get("storage_location_key", "") 
+        "storage_location_key": result.get("storage_location_key", "") 
     }
 
-
-# ────────────────────────────────────────────────
-# 5. Rental Agreement - GET
-# ────────────────────────────────────────────────
 @router.get("/rental-agreements/{claim_id}")
 async def get_rental_agreement(claim_id: str) -> Dict[str, Any]:
     conn = DBConnection.get_connection()
@@ -371,6 +252,7 @@ async def get_rental_agreement(claim_id: str) -> Dict[str, Any]:
         raise HTTPException(status_code=404, detail="Rental agreement not found")
     
     response = {
+        "user_name": result.get("user_name", ""),
         "rental_agreement_id": result["rental_agreement_id"],
         "claim_id": result["claim_id"],
         "hirer_name": result.get("hirer_name", ""),
@@ -386,7 +268,6 @@ async def get_rental_agreement(claim_id: str) -> Dict[str, Any]:
         "daily_rate": result.get("daily_rate"),
         "policy_excess": result.get("policy_excess"),
         "deposit": result.get("deposit"),
-        
         "refuelling_charge": result.get("refuelling_charge"),
         "insurance_company": result.get("insurance_company", ""),
         "policy_no": result.get("policy_no", ""),
@@ -394,7 +275,7 @@ async def get_rental_agreement(claim_id: str) -> Dict[str, Any]:
         "own_insurance_confirm": result.get("own_insurance_confirm", "No"),
         "insurance_date": result.get("insurance_date", ""),
         "insurance_time": result.get("insurance_time", ""),
-         "new_licence_no": result.get("new_licence_no", ""),
+        "new_licence_no": result.get("new_licence_no", ""),
         "new_date_issued": result.get("new_date_issued", ""),
         "new_expiry_date": result.get("new_expiry_date", ""),
         "new_dob": result.get("new_dob", ""),
@@ -449,9 +330,6 @@ async def get_rental_agreement(claim_id: str) -> Dict[str, Any]:
     }
     return response
 
-
-
-
 @router.post("/claims")
 async def create_claim(payload: Dict[str, Any]):
     conn = DBConnection.get_connection()
@@ -459,8 +337,8 @@ async def create_claim(payload: Dict[str, Any]):
 
     claimant_name = payload.get("claimant_name")
     claim_type    = payload.get("claim_type")
-    council       = payload.get("council")          # ← new required field
-    claim_id      = payload.get("claim_id")         # optional
+    council       = payload.get("council")
+    claim_id      = payload.get("claim_id")
 
     if not all([claimant_name, claim_type]):
         raise HTTPException(
@@ -472,7 +350,7 @@ async def create_claim(payload: Dict[str, Any]):
         a = queries.insert_claim(
             claimant_name=claimant_name,
             claim_type=claim_type,
-            council=council,                        # ← added
+            council=council,
             claim_id=claim_id
         )
         
@@ -490,6 +368,7 @@ async def create_claim(payload: Dict[str, Any]):
         "message": "Claim created successfully",
         "claim_id": claim_id or "auto-generated"
     }
+
 @router.delete("/claims/{claim_id}")
 async def delete_claim(claim_id: str):
     conn = DBConnection.get_connection()
@@ -508,14 +387,12 @@ async def delete_claim(claim_id: str):
         "claim_id": claim_id
     }
 
-
 @router.get("/claims")
 async def get_all_claims() -> list[Dict[str, Any]]:
     conn = DBConnection.get_connection()
     queries = Queries(conn)
 
     return queries.get_all_claims()
-
 
 @router.get("/claims/{claim_id}")
 async def get_claim(claim_id: str) -> Dict[str, Any]:
@@ -527,10 +404,6 @@ async def get_claim(claim_id: str) -> Dict[str, Any]:
         raise HTTPException(status_code=404, detail="Claim not found")
 
     return result
-
-
-
-
 
 @router.get("/claim-documents/{claim_id}", response_model=Dict[str, Any])
 async def get_claim_documents(claim_id: str):
@@ -547,7 +420,6 @@ async def get_claim_documents(claim_id: str):
         "documents": result.get("documents", {})
     }
 
-
 @router.delete("/claim-documents/{claim_id}/{doc_name}")
 async def delete_claim_document(claim_id: str, doc_name: str):
     conn = DBConnection.get_connection()
@@ -562,6 +434,11 @@ async def delete_claim_document(claim_id: str, doc_name: str):
         "message": f"Document '{doc_name}' deleted successfully",
         "claim_id": claim_id
     }
+
+class RegisterUserRequest(BaseModel):
+    username: str
+    password: str
+    role: str
 
 @router.post("/register")
 async def register_user(
@@ -593,6 +470,10 @@ async def register_user(
 
     return {"message": "User created successfully"}
 
+class ChangePasswordRequest(BaseModel):
+    username: str
+    new_password: str
+
 @router.put("/change-password")
 async def change_password(
     data: ChangePasswordRequest,
@@ -622,7 +503,6 @@ async def change_password(
 
     return {"message": "Password updated successfully"}
 
-    
 @router.delete("/users/{user_id}")
 async def delete_user(
     user_id: int,
@@ -648,7 +528,10 @@ async def delete_user(
     return {
         "message": "User deleted successfully"
     }
-    
+
+class SoftDeleteClaimRequest(BaseModel):
+    deleted_by: str
+
 @router.put("/claims/{claim_id}/soft-delete")
 async def soft_delete_claim(claim_id: str, request: SoftDeleteClaimRequest):
     conn = DBConnection.get_connection()
@@ -668,14 +551,16 @@ async def soft_delete_claim(claim_id: str, request: SoftDeleteClaimRequest):
         "deleted_by": request.deleted_by
     }
 
-
+class CloseClaimRequest(BaseModel):
+    closed_by: str
+    reason: Optional[str] = None
 
 @router.put("/claims/{claim_id}/close")
 async def close_claim(claim_id: str, request: CloseClaimRequest):
     conn = DBConnection.get_connection()
     queries = Queries(conn)
 
-    closed = queries.close_claim(claim_id, request.closed_by,request.reason)
+    closed = queries.close_claim(claim_id, request.closed_by, request.reason)
 
     if not closed:
         raise HTTPException(
@@ -688,8 +573,6 @@ async def close_claim(claim_id: str, request: CloseClaimRequest):
         "claim_id": claim_id,
         "closed_by": request.closed_by
     }
-
-
 
 @router.put("/claims/{claim_id}/reopen")
 async def reopen_claim(claim_id: str):
@@ -727,8 +610,7 @@ async def get_all_users(
     return {
         "users": users
     }
-    
-    
+
 @router.get("/recently")
 async def recently_deleted_claims():
     conn = DBConnection.get_connection()
@@ -736,16 +618,13 @@ async def recently_deleted_claims():
 
     claims = queries.get_recently_deleted_claims()
 
-    if not claims:  # optional: just for clarity
+    if not claims:
         return {"count": 0, "claims": []}
 
     return {
         "count": len(claims),
         "claims": claims
     }
-
-
-
 
 @router.get("/pre-inspection-forms/inspection/{inspection_id}")
 async def get_pre_inspection_form_by_inspection_id(
@@ -784,7 +663,13 @@ async def get_pre_inspection_form_by_inspection_id(
 
     return response
 
-
+class InvoiceCreate(BaseModel):
+    claim_id: str
+    info: str
+    docs: Optional[List[str]] = []
+    storage_bill: Optional[float] = 0
+    rent_bill: Optional[float] = 0
+    user_name: str
 
 @router.post("/invoice")
 async def create_invoice(data: InvoiceCreate):
@@ -808,6 +693,13 @@ async def create_invoice(data: InvoiceCreate):
         "invoice_id": invoice_id
     }
 
+class InvoiceUpdate(BaseModel):
+    info: str | None = None
+    storage_bill: float | None = None
+    rent_bill: float | None = None
+    user_name: str | None = None
+    payment_date: str | None = None
+    payment_amount: str | None = None
 
 @router.put("/invoice/{invoice_id}")
 async def update_invoice(
@@ -840,8 +732,6 @@ async def update_invoice(
         "invoice_id": updated_id
     }
 
-
-
 @router.get("/invoice")
 async def get_all_invoices():
     conn = DBConnection.get_connection()
@@ -855,7 +745,6 @@ async def get_all_invoices():
         "data": invoices
     }
 
-
 @router.get("/invoice/{claim_id}")
 async def get_invoices(claim_id: str):
     conn = DBConnection.get_connection()
@@ -868,15 +757,16 @@ async def get_invoices(claim_id: str):
         "count": len(invoices),
         "data": invoices
     }
-    
-
 
 @router.put("/claims/{claim_id}")
-async def update_claim(claim_id: str, payload: Dict[str, Any]):
+async def update_claim(
+    claim_id: str, 
+    payload: Dict[str, Any],
+    current_user: CurrentUser = Depends(get_current_user)  # Inject the current user here
+):
     conn = DBConnection.get_connection()
     queries = Queries(conn)
 
-    # Only accept valid fields
     valid_fields = ["claimant_name", "council", "claim_type", "pay_date", "claim_start_date", "invoice_date"]
     update_data = {k: payload[k] for k in valid_fields if k in payload}
 
@@ -887,7 +777,12 @@ async def update_claim(claim_id: str, payload: Dict[str, Any]):
         )
 
     try:
-        updated = queries.update_claim_dynamic(claim_id, update_data)
+        # Pass the username to the database function
+        updated = queries.update_claim_dynamic(
+            claim_id, 
+            update_data, 
+            updated_by=current_user.username
+        )
 
         if not updated:
             raise HTTPException(
@@ -902,7 +797,11 @@ async def update_claim(claim_id: str, payload: Dict[str, Any]):
     return {"message": "Claim updated successfully", "claim_id": claim_id}
 
 
-
+class CarCreate(BaseModel):
+    model: Optional[str] = None
+    name: Optional[str] = None
+    reg_no: Optional[str] = None
+    attributes: Optional[List[str]] = []
 
 @router.post("/car")
 async def create_car(payload: CarCreate):
@@ -913,7 +812,7 @@ async def create_car(payload: CarCreate):
             payload.model,
             payload.name,
             payload.reg_no,
-            payload.attributes if payload.attributes is not None else []  # ensure it's a list, even if None
+            payload.attributes if payload.attributes is not None else []
         )
     except Exception as e:
         conn.rollback()
@@ -923,6 +822,11 @@ async def create_car(payload: CarCreate):
         "message": "Car created successfully"
     }
 
+class CarUpdate(BaseModel):
+    model: Optional[str] = None
+    name: Optional[str] = None
+    service_time: Optional[str] = None
+    attributes: Optional[List[str]] = []
 
 @router.put("/car/{car_id}")
 async def update_car(car_id: int, payload: CarUpdate):
@@ -934,7 +838,7 @@ async def update_car(car_id: int, payload: CarUpdate):
             payload.model,
             payload.name,
             payload.service_time,
-            payload.attributes if payload.attributes is not None else []  # only update if provided
+            payload.attributes if payload.attributes is not None else []
         )
     except Exception as e:
         conn.rollback()
@@ -947,9 +851,6 @@ async def update_car(car_id: int, payload: CarUpdate):
         "success": True,
         "message": "Car updated successfully"
     }
-
-
-
 
 @router.delete("/car/{car_id}")
 async def delete_car(car_id: str):
@@ -968,8 +869,6 @@ async def delete_car(car_id: str):
             "message": f"No car found with id {car_id}"
         }
 
-
-
 @router.get("/car/{car_id}")
 async def get_car_by_id(car_id: int):
     conn = DBConnection.get_connection()
@@ -984,7 +883,6 @@ async def get_car_by_id(car_id: int):
         "data": car
     }
 
-
 @router.get("/cars")
 async def get_all_cars():
     conn = DBConnection.get_connection()
@@ -998,7 +896,6 @@ async def get_all_cars():
         "data": cars
     }
 
-
 @router.get("/cars/free/count")
 async def get_non_long_hire_cars_count():
     conn = DBConnection.get_connection()
@@ -1010,7 +907,6 @@ async def get_non_long_hire_cars_count():
         "success": True,
         "count": count
     }
-
 
 @router.get("/cars/free")
 async def get_free_cars():
@@ -1025,8 +921,6 @@ async def get_free_cars():
         "data": cars
     }
 
-
-
 @router.get("/cars/available")
 async def get_available_cars():
     conn = DBConnection.get_connection()
@@ -1040,8 +934,13 @@ async def get_available_cars():
         "data": cars
     }
 
-
 # ---------------------- LONG CLAIMS ----------------------
+
+class LongClaimCreate(BaseModel):
+    starting_date: Optional[str] = None
+    ending_date: Optional[str] = None
+    hirer_name: Optional[str] = None
+
 @router.post("/long-claim")
 async def create_long_claim(payload: LongClaimCreate):
     conn = DBConnection.get_connection()
@@ -1061,6 +960,12 @@ async def create_long_claim(payload: LongClaimCreate):
         "success": True,
         "long_claim_id": long_claim_id
     }
+
+class LongClaimUpdate(BaseModel):
+    long_claim_id: str
+    starting_date: Optional[str] = None
+    ending_date: Optional[str] = None
+    hirer_name: Optional[str] = None
 
 @router.put("/long-claim")
 async def update_long_claim(payload: LongClaimUpdate):
@@ -1084,6 +989,8 @@ async def update_long_claim(payload: LongClaimUpdate):
         "message": "Long claim updated successfully"
     }
 
+class LongClaimCarAction(BaseModel):
+    car_id: int
 
 @router.post("/long-claim/{long_claim_id}/add-car")
 async def add_car_to_long_claim(long_claim_id: str, payload: LongClaimCarAction):
@@ -1096,7 +1003,6 @@ async def add_car_to_long_claim(long_claim_id: str, payload: LongClaimCarAction)
         "success": True,
         "message": "Car added to long claim"
     }
-
 
 @router.delete("/long-claim/{long_claim_id}/remove-car/{car_id}")
 async def remove_car_from_long_claim(long_claim_id: str, car_id: int):
@@ -1123,9 +1029,20 @@ async def get_all_long_claims():
         "data": claims
     }
 
-
-
 # ---------------------- CLAIMANT ----------------------
+
+class ClaimantCreate(BaseModel):
+    claimant_id: Optional[str] = None
+    ref_no: Optional[str] = None
+    long_claim_id: str
+    car_id: int
+    start_date: Optional[str] = None
+    end_date: Optional[str] = None
+    miles: Optional[float] = None
+    name: Optional[str] = None
+    location: Optional[str] = None
+    delivery_charges: Optional[float] = 0
+
 @router.post("/claimant")
 async def create_claimant(payload: ClaimantCreate):
     conn = DBConnection.get_connection()
@@ -1151,13 +1068,20 @@ async def create_claimant(payload: ClaimantCreate):
         }
 
     except ValueError as e:
-        return HTTPException(
+        raise HTTPException(
             status_code=400,
             detail=str(e)
         )
 
-
-
+class ClaimantUpdate(BaseModel):
+    claimant_id: Optional[str] = None
+    ref_no: Optional[str] = None
+    start_date: Optional[str] = None
+    end_date: Optional[str] = None
+    miles: Optional[float] = None
+    name: Optional[str] = None
+    location: Optional[str] = None
+    delivery_charges: Optional[float] = None
 
 @router.put("/claimant/{claimant_id}")
 async def update_claimant(claimant_id: int, payload: ClaimantUpdate):
@@ -1165,11 +1089,8 @@ async def update_claimant(claimant_id: int, payload: ClaimantUpdate):
     queries = Queries(conn)
 
     try:
-        # exclude_unset=True keeps fields explicitly set to `null` 
-        # but ignores fields left completely out of the JSON body.
         update_data = payload.model_dump(exclude_unset=True)
 
-        # If they sent an empty payload {}
         if not update_data:
             return {"success": True, "message": "No updates provided"}
 
@@ -1181,23 +1102,18 @@ async def update_claimant(claimant_id: int, payload: ClaimantUpdate):
         }
 
     except ValueError as e:
-        # Note: You need to raise HTTPException, not return it
         raise HTTPException(
             status_code=400,
             detail=str(e)
         )
-    
-
 
 @router.get("/claimants/refs/long_claims")
 async def get_long_claims_by_refs(ref_nos: List[str] = Query(..., description="List of reference numbers")):
     conn = DBConnection.get_connection()
     queries = Queries(conn)
 
-    # Fetch data from DB
     raw_data = queries.get_long_claims_for_refs(ref_nos=ref_nos)
 
-    # Transform data into the format: {"1725092": ["LT001", "LT002"], "1722073": ["LT001", "LT002"]}
     formatted_data = {
         str(row["ref_no"]): row["long_claim_ids"] 
         for row in raw_data
@@ -1207,7 +1123,6 @@ async def get_long_claims_by_refs(ref_nos: List[str] = Query(..., description="L
         "success": True,
         "data": formatted_data
     }
-
 
 @router.delete("/claimant/{claimant_id}")
 async def delete_claimant(claimant_id: int):
@@ -1219,7 +1134,6 @@ async def delete_claimant(claimant_id: int):
         return {"success": True, "message": "Claimant deleted successfully"}
     else:
         return {"success": False, "message": "Claimant not found"}
-
 
 @router.get("/claimant/{claimant_id}")
 async def get_claimant_by_id(claimant_id: int):
@@ -1233,7 +1147,6 @@ async def get_claimant_by_id(claimant_id: int):
         "count": len(data),
         "data": data
     }
-
 
 @router.get("/claimants")
 async def get_all_claimants():
@@ -1249,8 +1162,6 @@ async def get_all_claimants():
     }
 
 # ---------------------- HIRE CHECKLIST ----------------------
-
-
 
 @router.get("/long-claim/{long_claim_id}/cars")
 async def get_cars_for_long_claim(long_claim_id: str):
@@ -1285,7 +1196,6 @@ async def get_claimants_for_claim(long_claim_id: str):
 
     data = queries.get_claimants_for_claim(long_claim_id)
 
-    # Optionally, group claimants by car_id for easier frontend use
     claimants_by_car = {}
     for claimant in data:
         car_id = claimant['car_id']
@@ -1315,7 +1225,6 @@ async def get_long_claim_by_id(claim_id: str):
         "data": claim
     }
 
-
 @router.put("/long-claim/{long_claim_id}/mark-invoice")
 async def mark_invoice(long_claim_id: str):
     conn = DBConnection.get_connection()
@@ -1327,8 +1236,6 @@ async def mark_invoice(long_claim_id: str):
     else:
         return {"success": False, "message": "Long claim not found"}
     
-
-
 @router.put("/long-claims/{claim_id}/restore")
 async def restore_claim(claim_id: str):
     conn = DBConnection.get_connection()
@@ -1337,7 +1244,6 @@ async def restore_claim(claim_id: str):
     if restored == 0:
         return {"success": False, "message": "Claim not found"}
     return {"success": True, "message": f"Claim {claim_id} restored successfully."}
-
 
 @router.delete("/long-claims/{claim_id}/delete")
 async def delete_long_claim(claim_id: str):
@@ -1367,7 +1273,6 @@ async def mark_recently_deleted(claim_id: str, payload: Dict[str, str]):
     
     return {"success": True, "message": f"Claim {claim_id} marked as recently deleted by {deleted_by}."}
 
-
 @router.get("/long/soft-deleted")
 async def get_soft_deleted_long_claims():
     conn = DBConnection.get_connection()
@@ -1381,25 +1286,12 @@ async def get_soft_deleted_long_claims():
         "data": claims
     }
 
-
 @router.get("/hire-checklists/{long_claim_id}/{car_id}/{claimant_id}")
 async def get_hire_checklists(
     long_claim_id: str,
     car_id: int,
     claimant_id: int
 ) -> List[Dict[str, Any]]:
-    """
-    Get ALL hire checklists for the given claim + car + claimant combination.
-    
-    Path parameters:
-      - long_claim_id : str
-      - car_id        : int
-      - claimant_id   : int
-    
-    Returns:
-      - list of checklists (each as dict)
-      - empty list [] if no checklists exist
-    """
     conn = DBConnection.get_connection()
     queries = Queries(conn)
 
@@ -1413,9 +1305,7 @@ async def get_hire_checklists(
 
     for result in results:
         item = {
-            # All 30 condition fields
             **{f"condition_{i}": result.get(f"condition_{i}", "") for i in range(1, 31)},
-            # Main metadata fields
             "date": result.get("date", ""),
             "customer": result.get("customer", ""),
             "detailer": result.get("detailer", ""),
@@ -1425,12 +1315,10 @@ async def get_hire_checklists(
             "model": result.get("model", ""),
             "notes": result.get("notes", ""),
             "recommendations": result.get("recommendations", ""),
-            # Signatures & images (allow None / null)
             "customer_signature": result.get("customer_signature"),
             "detailer_signature": result.get("detailer_signature"),
             "base_vehicle_image": result.get("base_vehicle_image"),
             "annotated_vehicle_image": result.get("annotated_vehicle_image"),
-            # Identifying keys
             "long_claim_id": result["long_claim_id"],
             "car_id": result["car_id"],
             "claimant_id": result["claimant_id"],
@@ -1439,7 +1327,6 @@ async def get_hire_checklists(
         response_list.append(item)
 
     return response_list
-
 
 @router.put("/claims/{claim_id}/restore")
 async def restore_claim(claim_id: str):
@@ -1459,8 +1346,6 @@ async def restore_claim(claim_id: str):
         "claim_id": claim_id
     }
 
-
-
 @router.put("/claims/{claim_id}/status")
 async def update_claim_status_api(claim_id: str, payload: Dict[str, str]):
     conn = DBConnection.get_connection()
@@ -1479,8 +1364,6 @@ async def update_claim_status_api(claim_id: str, payload: Dict[str, str]):
         raise HTTPException(status_code=500, detail=str(e))
 
     return {"message": "Status updated successfully", "claim_id": claim_id, "status": status}
-
-
 
 @router.put("/claims/{claim_id}/disputed")
 async def update_claim_disputed_api(claim_id: str, payload: Dict[str, Any]):
@@ -1511,8 +1394,6 @@ async def update_claim_disputed_api(claim_id: str, payload: Dict[str, Any]):
         "dispute_reason": dispute_reason
     }
 
-
-
 @router.get("/claim-bill/{claim_id}")
 async def get_claim_bill(claim_id: str) -> Dict[str, Any]:
     conn = DBConnection.get_connection()
@@ -1525,6 +1406,11 @@ async def get_claim_bill(claim_id: str) -> Dict[str, Any]:
         "rental": rental,
         "storage": storage
     }
+
+class LongHireInvoiceCreate(BaseModel):
+    claim_id: str
+    amount: float
+    user_name: str
 
 @router.post("/long_hire_invoice")
 async def create_long_hire_invoice(data: LongHireInvoiceCreate):
@@ -1541,6 +1427,7 @@ async def create_long_hire_invoice(data: LongHireInvoiceCreate):
         return {"success": False, "message": "Failed to create invoice"}
 
     return {"success": True, "invoice_id": invoice_id}
+
 @router.get("/long_hire_invoice")
 async def get_all_long_hire_invoices():
     conn = DBConnection.get_connection()
@@ -1554,8 +1441,6 @@ async def get_all_long_hire_invoices():
         "data": invoices
     }
 
-
-
 @router.get("/long-claim/{long_claim_id}/daily-rates")
 async def get_daily_rates(long_claim_id: str):
     conn = DBConnection.get_connection()
@@ -1563,7 +1448,6 @@ async def get_daily_rates(long_claim_id: str):
 
     data = queries.get_daily_rates_for_claim(long_claim_id)
 
-    # convert list to dict {car_id: daily_rate} for easier use in frontend
     rates = {item['car_id']: item['daily_rate'] or 0 for item in data}
 
     return {
@@ -1571,6 +1455,9 @@ async def get_daily_rates(long_claim_id: str):
         "data": rates
     }
 
+class DailyRateUpdate(BaseModel):
+    car_id: int
+    daily_rate: float
 
 @router.put("/long-claim/{long_claim_id}/daily-rate")
 async def update_daily_rate(long_claim_id: str, body: DailyRateUpdate):
@@ -1587,22 +1474,11 @@ async def update_daily_rate(long_claim_id: str, body: DailyRateUpdate):
         "success": updated
     }
 
-
-
 @router.put("/accident-claims/{claim_id}/direction")
 async def update_drawing_direction(
     claim_id: str,
     request: Request
 ) -> Dict[str, Any]:
-    """
-    Update value and JSON column for an accident claim.
-    Body:
-    {
-        "type": "before" | "after",
-        "value": "link or string value",
-        "json_data": { ... }  # optional JSON object
-    }
-    """
     try:
         data = await request.json()
     except Exception:
@@ -1610,7 +1486,7 @@ async def update_drawing_direction(
 
     direction_type = data.get("type")
     value = data.get("value")
-    json_data = data.get("json_data")  # optional JSON
+    json_data = data.get("json_data")
 
     if direction_type not in ["before", "after"]:
         raise HTTPException(status_code=400, detail="type must be 'before' or 'after'")
@@ -1630,8 +1506,7 @@ async def update_drawing_direction(
         "claim_id": claim_id,
         "updated_value_column": value_column,
         "value": value,
-            }
-
+    }
 
 @router.put("/cars/{car_id}/long")
 async def update_long_hire(
@@ -1662,7 +1537,6 @@ async def update_long_hire(
         "is_long_hire": value
     }
 
-
 @router.put("/cars/availability/{reg_no}")
 async def update_availability(
     reg_no: str,
@@ -1692,7 +1566,6 @@ async def update_availability(
         "is_available": value
     }
 
-
 @router.get("/summary/{claim_id}", response_model=Dict[str, Any])
 async def get_claim_summary(claim_id: str):
     conn = DBConnection.get_connection()
@@ -1703,11 +1576,10 @@ async def get_claim_summary(claim_id: str):
 
     return result
 
+class ClaimLockUpdate(BaseModel):
+    locked: bool
+    locked_by: Optional[str] = None
 
-
-
-
-# --- UPDATE LOCK STATUS ---
 @router.put("/claims/{claim_id}/lock", response_model=None)
 async def update_claim_lock(
     claim_id: str,
@@ -1730,7 +1602,6 @@ async def update_claim_lock(
         "locked_by": update.locked_by if update.locked else None
     }
 
-# --- GET LOCK STATUS ---
 @router.get("/claims/{claim_id}/lock", response_model=None)
 async def get_claim_lock_status(claim_id: str):
     conn = DBConnection.get_connection()
@@ -1746,7 +1617,6 @@ async def get_claim_lock_status(claim_id: str):
         "locked_by": claim.get("locked_by")
     }
 
-
 @router.get("/fleet-history", response_model=None)
 async def get_all_fleet_history():
     conn = DBConnection.get_connection()
@@ -1760,7 +1630,6 @@ async def get_all_fleet_history():
         "count": len(history),
         "data": history
     }
-
 
 @router.put("/claims/ref-no/{claim_id}")
 async def update_ref_no(
@@ -1791,7 +1660,9 @@ async def update_ref_no(
         "ref_no": ref_no
     }
 
-
+class PaymentUpdate(BaseModel):
+    payment: Optional[str] = None
+    pay_date: Optional[str] = None
 
 @router.put("/claims/{claim_id}/payment")
 async def update_payment_details(claim_id: str, payment_update: PaymentUpdate):
@@ -1809,28 +1680,35 @@ async def update_payment_details(claim_id: str, payment_update: PaymentUpdate):
 
     return {"message": "Payment details updated successfully"}
 
+class HireVehicleDatesUpdate(BaseModel):
+    date_in: Optional[str] = None
+    date_out: Optional[str] = None
 
 @router.put("/claims/{claim_id}/hire-vehicle-dates")
-async def update_hire_vehicle_dates(claim_id: str, payload: HireVehicleDatesUpdate):
+async def update_hire_vehicle_dates(
+    claim_id: str, 
+    payload: HireVehicleDatesUpdate,
+    current_user: CurrentUser = Depends(get_current_user)  # Inject current user
+):
     conn = DBConnection.get_connection()
     queries = Queries(conn)
 
-    if "date_in" not in payload.dict() and "date_out" not in payload.dict():
+    # Check if neither date_in nor date_out is present in the payload
+    if payload.dict().get("date_in") is None and payload.dict().get("date_out") is None:
         raise HTTPException(status_code=400, detail="At least one field must be provided")
 
+    # Pass the username from current_user to the updated_by parameter
     updated = queries.update_hire_vehicle_dates(
-        claim_id,
-        payload.date_in,
-        payload.date_out
+        claim_id=claim_id,
+        date_in=payload.date_in,
+        date_out=payload.date_out,
+        updated_by=current_user.username
     )
 
     if not updated:
         raise HTTPException(status_code=404, detail="Claim not found")
 
     return {"message": "Hire vehicle dates updated successfully"}
-
-
-
 @router.post("/claims/{claim_id}/updates")
 async def add_update(
     claim_id: str,
@@ -1850,15 +1728,12 @@ async def add_update(
         if field not in new_update:
             raise HTTPException(status_code=400, detail=f"{field} is required")
 
-
-    updated = queries.add_update(claim_id, new_update , current_user.id)
+    updated = queries.add_update(claim_id, new_update, current_user.id)
 
     if not updated:
         raise HTTPException(status_code=404, detail="Claim not found")
 
     return {"message": "Update added successfully"}
-
-
 
 @router.put("/claims/{claim_id}/updates/{update_id}")
 async def edit_update(claim_id: str, update_id: int, payload: dict):
@@ -1877,8 +1752,6 @@ async def edit_update(claim_id: str, update_id: int, payload: dict):
 
     return {"message": "Update edited successfully"}
 
-
-
 @router.get("/claims/{claim_id}/updates")
 async def get_updates(claim_id: str):
     conn = DBConnection.get_connection()
@@ -1891,8 +1764,10 @@ async def get_updates(claim_id: str):
         "data": updates
     }
 
-
-# --- ROUTES ---
+class BroadcastCreate(BaseModel):
+    sender_id: int
+    title: str
+    message: str
 
 @router.post("/notifications/broadcast")
 async def create_broadcast(payload: BroadcastCreate):
@@ -1967,9 +1842,6 @@ async def clean_expired_notifications():
         "message": f"Successfully deleted {deleted_count} expired notifications"
     }
 
-
-
-
 @router.patch("/notifications/users/{user_id}/clear")
 async def clear_all_notifications(user_id: int):
     conn = DBConnection.get_connection()
@@ -1983,3 +1855,33 @@ async def clear_all_notifications(user_id: int):
         "success": True,
         "message": "All notifications cleared for user"
     }
+
+@router.get("/claims/{claim_id}/history")
+async def get_claim_history(claim_id: str) -> list[Dict[str, Any]]:
+    conn = DBConnection.get_connection()
+    queries = Queries(conn)
+
+    result = queries.get_claim_changes_history(claim_id)
+
+    return result
+
+class ClaimChangeCreate(BaseModel):
+    user_name: str
+    date: str
+    form: str
+    fields: List[str]
+
+@router.post("/claims/{claim_id}/history")
+async def create_claim_history(claim_id: str, data: ClaimChangeCreate):
+    conn = DBConnection.get_connection()
+    queries = Queries(conn)
+
+    queries.insert_claim_change(
+        claim_id=claim_id,
+        user_name=data.user_name,
+        date=data.date,
+        form=data.form,
+        fields=data.fields
+    )
+
+    return {"message": "Claim change history added successfully"}

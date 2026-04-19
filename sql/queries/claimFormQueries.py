@@ -8,7 +8,7 @@ from decimal import Decimal
 import inspect
 from fastapi import HTTPException
 import json
-from datetime import datetime
+from datetime import datetime,date
 
 def parse_date(d):
     if d and isinstance(d, str) and d.strip():  # non-empty string
@@ -22,11 +22,6 @@ class ClaimFormQueries:
         self.conn = conn
 
     def upsert_accident_claim(self, claim_id: str, data: dict) -> dict | None:
-        """
-        Upsert (insert or update) accident claim.
-        Expects a flat dict with field names matching table columns (or subset).
-        Returns the resulting row as dict or None if failed.
-        """
         updatable_columns = [
             "checklist_vd", "checklist_pi", "checklist_dvla", "checklist_badge", "checklist_recovery",
             "checklist_hire", "checklist_ni_no", "checklist_storage", "checklist_plate",
@@ -52,31 +47,73 @@ class ClaimFormQueries:
         ]
 
         fields_to_update = [col for col in updatable_columns if col in data]
-
         if not fields_to_update and claim_id not in data:
             return None
 
-        set_clause = ", ".join(f"{col} = EXCLUDED.{col}" for col in fields_to_update)
-        columns = ["claim_id"] + fields_to_update
-        values_placeholders = ", ".join(f"%({col})s" for col in columns)
-
-        query = f"""
-        INSERT INTO accident_claims ({', '.join(columns)})
-        VALUES ({values_placeholders})  
-        ON CONFLICT (claim_id)
-        DO UPDATE SET
-            {set_clause}
-        RETURNING *;
-        """
-
-        params = {"claim_id": claim_id, **{k: data[k] for k in fields_to_update}}
+        changed_fields = []
+        user_name = data.get("user_name", "Unknown")
+        current_date = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
         try:
             with self.conn.cursor() as cur:
+                # 1. Check if entry already exists and get old values
+                cur.execute("SELECT * FROM accident_claims WHERE claim_id = %(claim_id)s", {"claim_id": claim_id})
+                old_row = cur.fetchone()
+                record_exists = old_row is not None
+                
+                if record_exists:
+                    columns = [desc[0] for desc in cur.description]
+                    old_dict = dict(zip(columns, old_row))
+                    
+                    for col in fields_to_update:
+                        old_val = old_dict.get(col)
+                        new_val = data[col]
+                        
+                        if isinstance(old_val, (date, Decimal)):
+                            old_val = str(old_val)
+                        # Normalize empty strings to None for comparison to avoid false positives
+                        comp_old = None if old_val == "" else old_val
+                        comp_new = None if new_val == "" else new_val
+                        
+                        if comp_old != comp_new:
+                            changed_fields.append(col)
+                else:
+                    changed_fields = fields_to_update.copy()
+
+                params = {"claim_id": claim_id, **{k: data[k] for k in fields_to_update}}
+
+                if record_exists:
+                    # 2a. UPDATE existing entry
+                    if not changed_fields:
+                        return old_dict # No changes to apply
+                    set_clause = ", ".join(f"{col} = %({col})s" for col in fields_to_update)
+                    query = f"""
+                        UPDATE accident_claims 
+                        SET {set_clause}
+                        WHERE claim_id = %(claim_id)s
+                        RETURNING *;
+                    """
+                else:
+                    # 2b. INSERT new entry
+                    insert_columns = ["claim_id"] + fields_to_update
+                    if "user_name" in data:
+                        insert_columns.append("user_name")
+                        params["user_name"] = data["user_name"]
+                    
+                    values_placeholders = ", ".join(f"%({col})s" for col in insert_columns)
+                    query = f"""
+                        INSERT INTO accident_claims ({', '.join(insert_columns)})
+                        VALUES ({values_placeholders})
+                        RETURNING *;
+                    """
+
                 cur.execute(query, params)
                 row = cur.fetchone()
                 if row:
                     self.conn.commit()
+                    if changed_fields:
+                        self.insert_claim_change(claim_id, user_name, current_date, "RTA Form", changed_fields)
+                    
                     columns = [desc[0] for desc in cur.description]
                     return dict(zip(columns, row))
                 return None
@@ -108,45 +145,73 @@ class ClaimFormQueries:
 
         fields_to_update = [col for col in updatable_columns if col in data]
 
-      
+        changed_fields = []
+        user_name = data.get("user_name", "Unknown")
+        current_date = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
         try:
             with self.conn.cursor() as cur:
-
+                # 1. Check if entry already exists
+                old_row = None
+                record_exists = False
                 if inspection_id:
-                    columns = ["claim_id", "inspection_id"] + fields_to_update
-                    values_placeholders = ", ".join(f"%({col})s" for col in columns)
-                    set_clause = ", ".join(f"{col} = EXCLUDED.{col}" for col in fields_to_update)
-
-                    query = f"""
-                    INSERT INTO pre_inspection_forms ({', '.join(columns)})
-                    VALUES ({values_placeholders})
-                    ON CONFLICT (inspection_id)
-                    DO UPDATE SET
-                        {set_clause}
-                    RETURNING *;
-                    """
-
-                    params = {
-                        "claim_id": claim_id,
-                        "inspection_id": inspection_id,
-                        **{col: data[col] for col in fields_to_update}
-                    }
-
+                    cur.execute("SELECT * FROM pre_inspection_forms WHERE inspection_id = %(inspection_id)s", {"inspection_id": inspection_id})
+                    old_row = cur.fetchone()
+                    record_exists = old_row is not None
+                
+                if record_exists:
+                    columns = [desc[0] for desc in cur.description]
+                    old_dict = dict(zip(columns, old_row))
+                    
+                    for col in fields_to_update:
+                        old_val = old_dict.get(col)
+                        new_val = data[col]
+                        
+                        if isinstance(old_val, (date, Decimal)):
+                            old_val = str(old_val)
+                        
+                        comp_old = None if old_val == "" else old_val
+                        comp_new = None if new_val == "" else new_val
+                        
+                        if comp_old != comp_new:
+                            changed_fields.append(col)
                 else:
-                    columns = ["claim_id"] + fields_to_update
-                    values_placeholders = ", ".join(f"%({col})s" for col in columns)
+                    changed_fields = fields_to_update.copy()
 
+                params = {
+                    "claim_id": claim_id,
+                    **{col: data[col] for col in fields_to_update}
+                }
+                if inspection_id:
+                    params["inspection_id"] = inspection_id
+
+                if record_exists:
+                    # 2a. UPDATE existing entry
+                    if not changed_fields:
+                        return old_dict
+                    set_clause = ", ".join(f"{col} = %({col})s" for col in fields_to_update)
                     query = f"""
-                    INSERT INTO pre_inspection_forms ({', '.join(columns)})
-                    VALUES ({values_placeholders})
-                    RETURNING *;
+                        UPDATE pre_inspection_forms
+                        SET {set_clause}
+                        WHERE inspection_id = %(inspection_id)s
+                        RETURNING *;
                     """
+                else:
+                    # 2b. INSERT new entry
+                    insert_columns = ["claim_id"] + fields_to_update
+                    if inspection_id:
+                        insert_columns.append("inspection_id")
 
-                    params = {
-                        "claim_id": claim_id,
-                        **{col: data[col] for col in fields_to_update}
-                    }
+                    if "user_name" in data:
+                        insert_columns.append("user_name")
+                        params["user_name"] = data["user_name"]
+
+                    values_placeholders = ", ".join(f"%({col})s" for col in insert_columns)
+                    query = f"""
+                        INSERT INTO pre_inspection_forms ({', '.join(insert_columns)})
+                        VALUES ({values_placeholders})
+                        RETURNING *;
+                    """
 
                 cur.execute(query, params)
                 row = cur.fetchone()
@@ -154,14 +219,18 @@ class ClaimFormQueries:
                     self.conn.commit()
                     return None
 
-                columns = [desc[0] for desc in cur.description]
                 self.conn.commit()
+                if changed_fields:
+                    self.insert_claim_change(claim_id, user_name, current_date, f"Hire Vehicle Form {inspection_id}", changed_fields)
+
+                columns = [desc[0] for desc in cur.description]
                 return dict(zip(columns, row))
 
         except Exception as e:
             print(f"Error in upsert_pre_inspection_form: {e}")
             self.conn.rollback()
             return None
+
     def upsert_cancellation_form(self, claim_id: str, data: dict) -> dict | None:
         updatable_columns = [
             "name", "address", "postcode", "email",
@@ -169,31 +238,73 @@ class ClaimFormQueries:
         ]
 
         fields_to_update = [col for col in updatable_columns if col in data]
-
         if not fields_to_update:
             return None
 
-        set_clause = ", ".join(f"{col} = EXCLUDED.{col}" for col in fields_to_update)
-        columns = ["claim_id"] + fields_to_update
-        values_placeholders = ", ".join(f"%({col})s" for col in columns)
-
-        query = f"""
-        INSERT INTO cancellation_forms ({', '.join(columns)})
-        VALUES ({values_placeholders})
-        ON CONFLICT (claim_id)
-        DO UPDATE SET
-            {set_clause}
-        RETURNING *;
-        """
-
-        params = {"claim_id": claim_id, **{k: data[k] for k in fields_to_update}}
+        changed_fields = []
+        user_name = data.get("user_name", "Unknown")
+        current_date = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
         try:
             with self.conn.cursor() as cur:
+                # 1. Check if entry already exists
+                cur.execute("SELECT * FROM cancellation_forms WHERE claim_id = %(claim_id)s", {"claim_id": claim_id})
+                old_row = cur.fetchone()
+                record_exists = old_row is not None
+
+                if record_exists:
+                    columns = [desc[0] for desc in cur.description]
+                    old_dict = dict(zip(columns, old_row))
+                    
+                    for col in fields_to_update:
+                        old_val = old_dict.get(col)
+                        new_val = data[col]
+                        
+                        if isinstance(old_val, (date, Decimal)):
+                            old_val = str(old_val)
+                        
+                        comp_old = None if old_val == "" else old_val
+                        comp_new = None if new_val == "" else new_val
+                        
+                        if comp_old != comp_new:
+                            changed_fields.append(col)
+                else:
+                    changed_fields = fields_to_update.copy()
+
+                params = {"claim_id": claim_id, **{k: data[k] for k in fields_to_update}}
+
+                if record_exists:
+                    # 2a. UPDATE existing entry
+                    if not changed_fields:
+                        return old_dict
+                    set_clause = ", ".join(f"{col} = %({col})s" for col in fields_to_update)
+                    query = f"""
+                        UPDATE cancellation_forms 
+                        SET {set_clause}
+                        WHERE claim_id = %(claim_id)s
+                        RETURNING *;
+                    """
+                else:
+                    # 2b. INSERT new entry
+                    insert_columns = ["claim_id"] + fields_to_update
+                    if "user_name" in data:
+                        insert_columns.append("user_name")
+                        params["user_name"] = data["user_name"]
+
+                    values_placeholders = ", ".join(f"%({col})s" for col in insert_columns)
+                    query = f"""
+                        INSERT INTO cancellation_forms ({', '.join(insert_columns)})
+                        VALUES ({values_placeholders})
+                        RETURNING *;
+                    """
+
                 cur.execute(query, params)
                 row = cur.fetchone()
                 if row:
                     self.conn.commit()
+                    if changed_fields:
+                        self.insert_claim_change(claim_id, user_name, current_date, "Cancellation Form", changed_fields)
+                        
                     columns = [desc[0] for desc in cur.description]
                     return dict(zip(columns, row))
             return None
@@ -213,35 +324,80 @@ class ClaimFormQueries:
         ]
 
         fields_to_update = [col for col in updatable_columns if col in data]
-
         if not fields_to_update:
             print("No fields to update in storage form")
             return None
 
-        # Convert empty strings to None (good practice you already had)
+        # Convert empty strings to None for DB writing
         cleaned_data = {k: None if v == "" else v for k, v in data.items()}
-
-        set_clause = ", ".join(f"{col} = EXCLUDED.{col}" for col in fields_to_update)
-        columns = ["claim_id"] + fields_to_update
-        values_placeholders = ", ".join(f"%({col})s" for col in columns)
-
-        query = f"""
-        INSERT INTO storage_forms ({', '.join(columns)})
-        VALUES ({values_placeholders})
-        ON CONFLICT (claim_id)
-        DO UPDATE SET
-            {set_clause}
-        RETURNING *;
-        """
-
-        params = {"claim_id": claim_id, **{k: cleaned_data[k] for k in fields_to_update}}
+        
+        changed_fields = []
+        user_name = data.get("user_name", "Unknown")
+        current_date = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
         try:
             with self.conn.cursor() as cur:
+                # 1. Check if entry already exists
+                cur.execute("SELECT * FROM storage_forms WHERE claim_id = %(claim_id)s", {"claim_id": claim_id})
+                old_row = cur.fetchone()
+                record_exists = old_row is not None
+
+                if record_exists:
+                    columns = [desc[0] for desc in cur.description]
+                    old_dict = dict(zip(columns, old_row))
+                    
+                    for col in fields_to_update:
+                        old_val = old_dict.get(col)
+                        # We use cleaned_data here because it already normalizes "" to None
+                        new_val = cleaned_data[col]
+                        
+                        if isinstance(old_val, (date, Decimal)):
+                            old_val = str(old_val)
+                        comp_old = None if old_val == "" else old_val
+                        comp_new = None if new_val == "" else new_val
+                        
+                        if comp_old != comp_new:
+                            print(f"[CHANGE DETECTED] Field: '{col}' | Old: {repr(old_val)} -> New: {repr(new_val)}")
+                            changed_fields.append(col)
+                        else:
+                            print(f"[NO CHANGE]       Field: '{col}' | Old: {repr(old_val)} -> New: {repr(new_val)}")
+                else:
+                    changed_fields = fields_to_update.copy()
+
+                params = {"claim_id": claim_id, **{k: cleaned_data[k] for k in fields_to_update}}
+
+                if record_exists:
+                    # 2a. UPDATE existing entry
+                    if not changed_fields:
+                        return old_dict
+                    set_clause = ", ".join(f"{col} = %({col})s" for col in fields_to_update)
+                    query = f"""
+                        UPDATE storage_forms 
+                        SET {set_clause}
+                        WHERE claim_id = %(claim_id)s
+                        RETURNING *;
+                    """
+                else:
+                    # 2b. INSERT new entry
+                    insert_columns = ["claim_id"] + fields_to_update
+                    if "user_name" in data:
+                        insert_columns.append("user_name")
+                        params["user_name"] = cleaned_data.get("user_name", data["user_name"])
+
+                    values_placeholders = ", ".join(f"%({col})s" for col in insert_columns)
+                    query = f"""
+                        INSERT INTO storage_forms ({', '.join(insert_columns)})
+                        VALUES ({values_placeholders})
+                        RETURNING *;
+                    """
+
                 cur.execute(query, params)
                 row = cur.fetchone()
                 if row:
                     self.conn.commit()
+                    if changed_fields:
+                        self.insert_claim_change(claim_id, user_name, current_date, "Storage Form", changed_fields)
+                        
                     columns = [desc[0] for desc in cur.description]
                     return dict(zip(columns, row))
             return None
@@ -250,7 +406,8 @@ class ClaimFormQueries:
             self.conn.rollback()
             return None
 
-   
+
+
     def insert_claim(
         self,
         claimant_name: str | None,
@@ -286,7 +443,9 @@ class ClaimFormQueries:
             print(f"Error in delete_claim: {e}")
             self.conn.rollback()
             return False
-    def update_claim_dynamic(self, claim_id: str, update_data: Dict[str, Any]) -> bool:
+        
+    
+    def update_claim_dynamic(self, claim_id: str, update_data: Dict[str, Any], updated_by: str = None) -> bool:
         fields = []
         values = []
 
@@ -304,10 +463,33 @@ class ClaimFormQueries:
         """
         values.append(claim_id)
 
-        with self.conn.cursor() as cur:
-            cur.execute(query, tuple(values))
-            self.conn.commit()
-            return cur.rowcount > 0
+        try:
+            with self.conn.cursor() as cur:
+                cur.execute(query, tuple(values))
+                
+                if cur.rowcount > 0:
+                    self.conn.commit()
+                    
+                    # Log the changes if an updated_by user was provided
+                    if updated_by:
+                        current_date = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                        updated_fields = list(update_data.keys())  # The fields updated are the keys in update_data
+                        
+                        self.insert_claim_change(
+                            claim_id=claim_id,
+                            user_name=updated_by,
+                            date=current_date,
+                            form="Claim Dashboard",
+                            fields=updated_fields
+                        )
+                    return True
+                
+                return False
+        except Exception as e:
+            self.conn.rollback()
+            print(f"Error updating claim dynamic: {e}")
+            raise
+
 
     def upsert_rental_agreement(self, claim_id: str, data: dict) -> dict | None:
         def get_existing_rental():
@@ -344,7 +526,6 @@ class ClaimFormQueries:
                 print("CASE")
                 return
             
-
             # CASE 1: both null → insert
             if not old_out and not old_in:
                 if new_out and not new_in:
@@ -358,7 +539,6 @@ class ClaimFormQueries:
                     self.update_fleet_history_hire_end(new_in, claim_id, reg, old_out, miles_in_val, miles_out_val)
 
             # CASE 3: both exist → do nothing
-
             elif old_out and old_in:
                 print("CASE 3")
                 print(f"old_out: {old_out}, old_in: {old_in}, new_out: {new_out}, new_in: {new_in}")
@@ -400,19 +580,11 @@ class ClaimFormQueries:
         if not fields_to_update:
             return None
 
-        set_clause = ", ".join(f"{col} = EXCLUDED.{col}" for col in fields_to_update)
-        columns = ["claim_id"] + fields_to_update
-        values_placeholders = ", ".join(f"%({col})s" for col in columns)
+        changed_fields = []
+        user_name = data.get("user_name", "Unknown")
+        current_date = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
-        query = f"""
-        INSERT INTO rental_agreements ({', '.join(columns)})
-        VALUES ({values_placeholders})
-        ON CONFLICT (claim_id)
-        DO UPDATE SET
-            {set_clause}
-        RETURNING *;
-        """
-
+        # Prepare parameters for the dynamically built query
         params = {"claim_id": claim_id}
         for k in fields_to_update:
             if k == "change_vehicle_history" and k in data:
@@ -422,11 +594,86 @@ class ClaimFormQueries:
 
         try:
             with self.conn.cursor() as cur:
+                # 1. Check if entry already exists and get old values for comparison
+                cur.execute("SELECT * FROM rental_agreements WHERE claim_id = %(claim_id)s", {"claim_id": claim_id})
+                old_row = cur.fetchone()
+                record_exists = old_row is not None
+
+                if record_exists:
+                    columns = [desc[0] for desc in cur.description]
+                    old_dict = dict(zip(columns, old_row))
+                    
+                    for col in fields_to_update:
+                        old_val = old_dict.get(col)
+                        new_val = data[col]
+                        
+                        # Special handling for JSON field comparison
+                        if col == "change_vehicle_history":
+                            if isinstance(old_val, str):
+                                try:
+                                    old_val = json.loads(old_val)
+                                except Exception:
+                                    pass
+                            
+                            # Remove 'fromApi' from old_val to avoid false comparison
+                            if isinstance(old_val, list):
+                                for item in old_val:
+                                    if isinstance(item, dict):
+                                        item.pop("fromApi", None)
+                                        
+                            # Remove 'fromApi' from new_val to avoid false comparison
+                            if isinstance(new_val, list):
+                                for item in new_val:
+                                    if isinstance(item, dict):
+                                        item.pop("fromApi", None)
+
+                        if isinstance(old_val, (date, Decimal)):
+                            old_val = str(old_val)
+                        
+                        # Normalize empty strings to None for comparison to avoid false positives
+                        comp_old = None if old_val == "" else old_val
+                        comp_new = None if new_val == "" else new_val
+                        
+                        if comp_old != comp_new:
+                            print(f"[CHANGE DETECTED] Field: '{col}' | Old: {repr(old_val)} -> New: {repr(new_val)}")
+                            changed_fields.append(col)
+                        else:
+                            print(f"[NO CHANGE]       Field: '{col}' | Old: {repr(old_val)} -> New: {repr(new_val)}")
+                else:
+                    changed_fields = fields_to_update.copy()
+
+                if record_exists:
+                    # 2a. UPDATE existing entry
+                    set_clause = ", ".join(f"{col} = %({col})s" for col in fields_to_update)
+                    query = f"""
+                        UPDATE rental_agreements 
+                        SET {set_clause}
+                        WHERE claim_id = %(claim_id)s
+                        RETURNING *;
+                    """
+                else:
+                    # 2b. INSERT new entry
+                    insert_columns = ["claim_id"] + fields_to_update
+                    if "user_name" in data:
+                        insert_columns.append("user_name")
+                        params["user_name"] = data["user_name"]
+
+                    values_placeholders = ", ".join(f"%({col})s" for col in insert_columns)
+                    query = f"""
+                        INSERT INTO rental_agreements ({', '.join(insert_columns)})
+                        VALUES ({values_placeholders})
+                        RETURNING *;
+                    """
+
                 cur.execute(query, params)
                 row = cur.fetchone()
 
                 if not row:
                     return None
+
+                # Log changes history if anything was updated or inserted
+                if changed_fields:
+                    self.insert_claim_change(claim_id, user_name, current_date, "Rental Agreements", changed_fields)
 
                 col_names = [desc[0] for desc in cur.description]
                 result = dict(zip(col_names, row))
@@ -447,6 +694,7 @@ class ClaimFormQueries:
 
                 if reg:
                     handle_fleet_history(reg, old_out, old_in, new_out, new_in, miles_out_val, miles_in_val)
+                
                 # ---------------------------
                 # 🔁 CHANGE VEHICLE HISTORY
                 # ---------------------------
@@ -510,7 +758,7 @@ class ClaimFormQueries:
                 if hire_out or hire_in:
                     all_entries.append({
                         "vehicle_reg": hire_reg,
-                        "date_out": parse_date(hire_out),
+                        "date_out": parse_date(hire_out), # Note: assuming parse_date is imported/available in the class scope
                         "date_in": parse_date(hire_in)
                     })
 
@@ -571,7 +819,6 @@ class ClaimFormQueries:
             print(f"Error in upsert_rental_agreement: {e}")
             self.conn.rollback()
             return None
-        
         
     def upsert_claim_documents(self, claim_id: str, documents: dict) -> None:
         query = """
@@ -922,10 +1169,8 @@ class ClaimFormQueries:
         rent_bill: float = None,
         user_name: str = None
     ) -> int:
-        print(claim_id, info, docs, storage_bill, rent_bill, user_name)
-        if docs and 'Rental Agreement' in docs:
-            self.update_claim_status(claim_id, "invoice sent")
 
+        # 1. Prepare data
         fields = {
             "claim_id": claim_id,
             "info": info,
@@ -936,22 +1181,18 @@ class ClaimFormQueries:
             "invoice_datetime": datetime.now()   # ALWAYS include
         }
 
-        # Filter out None values
         insert_fields = {k: v for k, v in fields.items() if v is not None}
-
         columns = ", ".join(insert_fields.keys())
         placeholders = ", ".join(["%s"] * len(insert_fields))
 
-        # This will automatically include "invoice_datetime = EXCLUDED.invoice_datetime"
         update_fields = [
             f"{k} = EXCLUDED.{k}"
             for k in insert_fields.keys()
             if k != "claim_id"
         ]
-
         update_clause = ", ".join(update_fields)
 
-        query = f"""
+        upsert_query = f"""
             INSERT INTO invoice ({columns})
             VALUES ({placeholders})
             ON CONFLICT (claim_id)
@@ -961,15 +1202,36 @@ class ClaimFormQueries:
 
         try:
             with self.conn.cursor() as cur:
-                cur.execute(query, tuple(insert_fields.values()))
+                # 2. Check if the invoice already exists for this claim_id
+                cur.execute("SELECT id FROM invoice WHERE claim_id = %s;", (claim_id,))
+                invoice_exists = cur.fetchone() is not None
+
+                # 3. Execute the Insert/Update
+                cur.execute(upsert_query, tuple(insert_fields.values()))
                 invoice_id = cur.fetchone()[0]
+
+                # 4. Handle "Invoice Sent" logic and Claim Change logging
+                if docs and 'Rental Agreement' in docs:
+                    self.update_claim_status(claim_id, "invoice sent")
+                    
+                    # If the invoice was already there (meaning it's an update), log the claim change
+                if invoice_exists:
+                        # Assuming you have a method named `insert_claim_change`
+                    self.insert_claim_change(
+                        claim_id=claim_id,
+                        user_name=user_name,
+                        date=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                        form="Invoice Sent",
+                        fields=docs  # You can customize this to include specific fields that changed if needed
+                    )
+
                 self.conn.commit()
                 return invoice_id
+
         except Exception as e:
             print(f"Error inserting/updating invoice: {e}")
             self.conn.rollback()
             return 0
-
             
     def update_invoice(
     self,
@@ -1058,6 +1320,7 @@ class ClaimFormQueries:
                 i.id,
                 i.claim_id,
                 c.claimant_name,
+                c.claim_type,
                 i.invoice_datetime,
                 i.info,
                 i.docs,
@@ -1706,7 +1969,6 @@ class ClaimFormQueries:
         
 
     def close_claim(self, claim_id: str, closed_by: str, reason: str | None) -> bool:
-        print(claim_id, closed_by, reason)
         query = """
             UPDATE claims
             SET closed_by = %s,
@@ -1720,12 +1982,23 @@ class ClaimFormQueries:
                 if cur.rowcount == 0:
                     return False
                 self.conn.commit()
+            
+            # Call the insert_claim_change function with the requested parameters
+            current_date = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            self.insert_claim_change(
+                claim_id=claim_id,
+                user_name=closed_by,
+                date=current_date,
+                form="Closed Claim",
+                fields=None  # Passing None to represent null
+            )
+            
             return True
         except Exception as e:
-            print(f"Error in close_claim: {e}")
             self.conn.rollback()
-            return False
-        
+            print("Error closing claim:", e)
+            raise
+    
     def reopen_claim(self, claim_id: str) -> bool:
         query = """
             UPDATE claims
@@ -2235,20 +2508,27 @@ class ClaimFormQueries:
             print(f"Error in get_user_by_id: {e}")
             return None
 
-    def update_hire_vehicle_dates(self, claim_id: str, date_in: str = None, date_out: str = None) -> dict | None:
+    def update_hire_vehicle_dates(self, claim_id: str, date_in: str = None, date_out: str = None, updated_by: str = None) -> dict | None:
         fields = []
+        updated_fields_log = []  # List to track the exact field names being updated for the history log
         params = {"claim_id": claim_id}
 
         if "date_in" in locals():
             fields.append("hire_vehicle_date_in = %(date_in)s")
             params["date_in"] = date_in  # None will become NULL in Postgres
+            updated_fields_log.append("hire_vehicle_date_in")
 
         if "date_out" in locals():
             fields.append("hire_vehicle_date_out = %(date_out)s")
             params["date_out"] = date_out
-
+            updated_fields_log.append("hire_vehicle_date_out")
+            
         if not fields:
             return None
+
+        # Fallback values for the INSERT part if they are somehow missing
+        params.setdefault("date_in", None)
+        params.setdefault("date_out", None)
 
         query = f"""
             INSERT INTO rental_agreements (claim_id, hire_vehicle_date_in, hire_vehicle_date_out)
@@ -2266,6 +2546,18 @@ class ClaimFormQueries:
                 if row:
                     self.conn.commit()
                     self.refresh_rental_agreements_view()
+                    
+                    # Log the changes
+                    if updated_by:
+                        current_date = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                        self.insert_claim_change(
+                            claim_id=claim_id,
+                            user_name=updated_by,
+                            date=current_date,
+                            form="Claim Dashboard",
+                            fields=["Hire Vehicle Dates"]  # General field name for the dashboard log
+                        )
+                    
                     columns = [desc[0] for desc in cur.description]
                     return dict(zip(columns, row))
             return None
@@ -2273,9 +2565,6 @@ class ClaimFormQueries:
             print(f"Error updating hire vehicle dates: {e}")
             self.conn.rollback()
             return None
-        
-
-
 
 
     def refresh_rental_agreements_view(self):
@@ -2473,4 +2762,36 @@ class ClaimFormQueries:
             self.conn.rollback()
             raise e
 
-    
+    def get_claim_changes_history(self, claim_id: str) -> list[dict]:
+        query = """
+            SELECT * 
+            FROM claim_changes_history
+            WHERE claim_id = %s
+            ORDER BY id DESC;
+        """
+        with self.conn.cursor() as cur:
+            cur.execute(query, (claim_id,))
+            rows = cur.fetchall()
+            columns = [desc[0] for desc in cur.description]
+            return [dict(zip(columns, row)) for row in rows]
+            
+    def insert_claim_change(
+        self,
+        claim_id: str,
+        user_name: str,
+        date: str,
+        form: str,
+        fields: list[str]
+    ):
+        query = """
+            INSERT INTO claim_changes_history (claim_id, user_name, date, form, fields)
+            VALUES (%s, %s, %s, %s, %s);
+        """
+        try:
+            with self.conn.cursor() as cur:
+                cur.execute(query, (claim_id, user_name, date, form, fields))
+            self.conn.commit()
+        except Exception as e:
+            self.conn.rollback()
+            print("Error inserting claim change:", e)
+            raise
