@@ -1692,10 +1692,9 @@ async def update_hire_vehicle_dates(
 ):
     conn = DBConnection.get_connection()
     queries = Queries(conn)
-
+    print(f"Received request to update hire vehicle dates for claim_id: {claim_id} with payload: {payload.dict()} by user: {current_user.username}")
     # Check if neither date_in nor date_out is present in the payload
-    if payload.dict().get("date_in") is None and payload.dict().get("date_out") is None:
-        raise HTTPException(status_code=400, detail="At least one field must be provided")
+
 
     # Pass the username from current_user to the updated_by parameter
     updated = queries.update_hire_vehicle_dates(
