@@ -1622,7 +1622,7 @@ async def get_claim_lock_status(claim_id: str):
 
 
 
-LOCK_DURATION_SECONDS = 60  # 5 minutes
+LOCK_DURATION_SECONDS = 300  
 @router.put("/claims/{claim_id}/lock")
 async def update_claim_lock(
     claim_id: str,
