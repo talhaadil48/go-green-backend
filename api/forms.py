@@ -8,6 +8,7 @@ from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
 from pydantic import BaseModel
 from utils.jwt_handler import decode_token
 from fastapi import status
+from datetime import datetime,timezone,timedelta
 
 security = HTTPBearer(
     scheme_name="Bearer",
@@ -1576,46 +1577,136 @@ async def get_claim_summary(claim_id: str):
 
     return result
 
-class ClaimLockUpdate(BaseModel):
-    locked: bool
-    locked_by: Optional[str] = None
+class ClaimLockRequest(BaseModel):
+    locked_by: str
 
-@router.put("/claims/{claim_id}/lock", response_model=None)
+@router.get("/claims/{claim_id}/lock")
+async def get_claim_lock_status(claim_id: str):
+    conn = DBConnection.get_connection()
+    queries = Queries(conn)
+
+    print(f"[GET] claim_id: {claim_id}")
+
+    claim = queries.get_claim_lock(claim_id)
+    if not claim:
+        print("[GET] Claim not found")
+        raise HTTPException(status_code=404, detail="Claim not found")
+
+    now = datetime.now(timezone.utc)
+
+    locked_by = claim.get("locked_by")
+    expires_at = claim.get("lock_expires_at")
+
+    is_locked = False
+
+    if locked_by and expires_at:
+        if expires_at.tzinfo is None:
+            expires_at = expires_at.replace(tzinfo=timezone.utc)
+
+        if expires_at > now:
+            print("[GET] Lock ACTIVE")
+            is_locked = True
+        else:
+            print("[GET] Lock EXPIRED → clearing")
+            queries.clear_claim_lock(claim_id)
+            locked_by = None
+    else:
+        print("[GET] No lock present")
+
+    return {
+        "claim_id": claim_id,
+        "locked": is_locked,
+        "locked_by": locked_by,
+        "lock_expires_at": expires_at if is_locked else None
+    }
+
+
+
+LOCK_DURATION_SECONDS = 60  # 5 minutes
+@router.put("/claims/{claim_id}/lock")
 async def update_claim_lock(
     claim_id: str,
-    update: ClaimLockUpdate,
+    update: ClaimLockRequest,
     current_user: CurrentUser = Depends(get_current_user)
 ):
     conn = DBConnection.get_connection()
     queries = Queries(conn)
 
-    print(f"Updating lock status for claim_id: {claim_id} to {update.locked} by user: {current_user.username}")
-    queries.update_claim_lock(
+    now = datetime.now(timezone.utc)
+    expires_at = now + timedelta(seconds=LOCK_DURATION_SECONDS)
+
+    print(f"[LOCK] request by {update.locked_by} for {claim_id}")
+
+    claim = queries.get_claim_lock(claim_id)
+    if not claim:
+        print("[LOCK] Claim not found")
+        raise HTTPException(status_code=404, detail="Claim not found")
+
+    existing_user = claim.get("locked_by")
+    existing_expiry = claim.get("lock_expires_at")
+
+    if existing_expiry and existing_expiry.tzinfo is None:
+        existing_expiry = existing_expiry.replace(tzinfo=timezone.utc)
+
+    # ❗ CONFLICT CONDITION
+    if (
+        existing_user
+        and existing_user != update.locked_by
+        and existing_expiry
+        and existing_expiry > now
+    ):
+        print(f"[LOCK] BLOCKED (owned by {existing_user})")
+        return {
+            "success": False,
+            "message": "Claim already locked by another user",
+            "locked_by": existing_user,
+            "lock_expires_at": existing_expiry
+        }
+
+    print("[LOCK] GRANTED / REFRESHED")
+
+    queries.set_claim_lock(
         claim_id=claim_id,
-        locked=update.locked,
-        locked_by=update.locked_by if update.locked else None
+        locked_by=update.locked_by,
+        lock_expires_at=expires_at
     )
 
     return {
+        "success": True,
         "claim_id": claim_id,
-        "locked": update.locked,
-        "locked_by": update.locked_by if update.locked else None
+        "locked_by": update.locked_by,
+        "lock_expires_at": expires_at
     }
 
-@router.get("/claims/{claim_id}/lock", response_model=None)
-async def get_claim_lock_status(claim_id: str):
+
+@router.delete("/claims/{claim_id}/lock")
+async def unlock_claim(
+    claim_id: str,
+    current_user: CurrentUser = Depends(get_current_user)
+):
     conn = DBConnection.get_connection()
     queries = Queries(conn)
-    print(f"Fetching lock status for claim_id: {claim_id}")
+
+    print(f"[UNLOCK] request by {current_user.username} for {claim_id}")
+
     claim = queries.get_claim_lock(claim_id)
+
     if not claim:
+        print("[UNLOCK] Claim not found")
         raise HTTPException(status_code=404, detail="Claim not found")
 
+    print("[UNLOCK] clearing lock")
+
+    queries.clear_claim_lock(claim_id)
+
     return {
+        "success": True,
         "claim_id": claim_id,
-        "locked": claim.get("locked", False),
-        "locked_by": claim.get("locked_by")
+        "locked": False,
+        "locked_by": None,
+        "lock_expires_at": None
     }
+
 
 @router.get("/fleet-history", response_model=None)
 async def get_all_fleet_history():
@@ -1708,6 +1799,8 @@ async def update_hire_vehicle_dates(
         raise HTTPException(status_code=404, detail="Claim not found")
 
     return {"message": "Hire vehicle dates updated successfully"}
+
+
 @router.post("/claims/{claim_id}/updates")
 async def add_update(
     claim_id: str,

@@ -2317,21 +2317,52 @@ class ClaimFormQueries:
 
         return summary  
     
-    def get_claim_lock(self, claim_id: str) -> dict | None:
-        query = "SELECT * FROM claims WHERE claim_id = %s;"
+    def get_claim_lock(self, claim_id: str):
+        query = """
+            SELECT claim_id, locked_by, lock_expires_at
+            FROM claims
+            WHERE claim_id = %s;
+        """
         with self.conn.cursor() as cur:
             cur.execute(query, (claim_id,))
             row = cur.fetchone()
-            if row:
-                columns = [desc[0] for desc in cur.description]
-                return dict(zip(columns, row))
-        return None
 
-    def update_claim_lock(self, claim_id: str, locked: bool, locked_by: str | None):
-        query = "UPDATE claims SET locked = %s, locked_by = %s WHERE claim_id = %s;"
+            if not row:
+                return None
+
+            return {
+                "claim_id": row[0],
+                "locked_by": row[1],
+                "lock_expires_at": row[2]
+            }
+ 
+
+    def set_claim_lock(self, claim_id: str, locked_by: str, lock_expires_at):
+        query = """
+            UPDATE claims
+            SET locked_by = %s,
+                lock_expires_at = %s,
+                lock_updated_at = NOW()
+            WHERE claim_id = %s;
+        """
         with self.conn.cursor() as cur:
-            cur.execute(query, (locked, locked_by, claim_id))
+            cur.execute(query, (locked_by, lock_expires_at, claim_id))
+
         self.conn.commit()
+
+    def clear_claim_lock(self, claim_id: str):
+        query = """
+            UPDATE claims
+            SET locked_by = NULL,
+                lock_expires_at = NULL,
+                lock_updated_at = NOW()
+            WHERE claim_id = %s;
+        """
+        with self.conn.cursor() as cur:
+            cur.execute(query, (claim_id,))
+
+        self.conn.commit()
+
 
     def insert_fleet_history(
     self,

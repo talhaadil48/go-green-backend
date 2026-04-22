@@ -581,3 +581,21 @@ async def upsert_hire_checklist(request: Request) -> Dict[str, Any]:
 
     return response
 
+
+
+
+@router.post("/claims/{claim_id}/unlock")
+async def unlock_claim(claim_id: str, request: Request):
+    data = await request.json()
+    locked = data.get("locked", False)
+    print(f"LOCKED CHANGE TO FALSE for {claim_id}")
+    conn = DBConnection.get_connection()
+    queries = Queries(conn)
+
+    queries.update_claim_lock(
+        claim_id=claim_id,
+        locked=locked,
+        locked_by=None
+    )
+
+    return {"status": "ok"}
