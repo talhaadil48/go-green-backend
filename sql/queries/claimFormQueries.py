@@ -982,67 +982,92 @@ class ClaimFormQueries:
     
     def get_all_claims(self) -> list[dict]:
         query = """
-            SELECT
-                c.*,
-                
-                -- latest invoice
-                i.id AS invoice_id,
-                i.invoice_datetime,
-                i.info,
+        SELECT
+            c.*,
+            
+            -- latest invoice
+            i.id AS invoice_id,
+            i.invoice_datetime,
+            i.info,
 
-                -- hire_end_date: latest of hire_vehicle_date_in and JSON date_in
-                CASE
-                    WHEN ra.hire_vehicle_date_in IS NOT NULL
-                        AND EXISTS (
-                            SELECT 1
-                            FROM jsonb_array_elements(ra.change_vehicle_history::jsonb) AS j
-                            WHERE NULLIF(j->>'date_out','') IS NOT NULL
-                        )
-                        AND NOT EXISTS (
-                            SELECT 1
-                            FROM jsonb_array_elements(ra.change_vehicle_history::jsonb) AS j
-                            WHERE NULLIF(j->>'date_in','') IS NOT NULL
-                        )
-                    THEN NULL
-                    ELSE GREATEST(
-                        ra.hire_vehicle_date_in,
-                        (
-                            SELECT MAX((NULLIF(j->>'date_in',''))::date)
-                            FROM jsonb_array_elements(ra.change_vehicle_history::jsonb) AS j
-                            WHERE NULLIF(j->>'date_in','') IS NOT NULL
-                        )
-                    )
-                END AS hire_end_date,
-
-                -- hire_start_date: earliest of hire_vehicle_date_out and JSON date_out
-                LEAST(
-                    ra.hire_vehicle_date_out,
-                    (
-                        SELECT MIN((NULLIF(j->>'date_out',''))::date)
+            -- hire_end_date: latest of hire_vehicle_date_in and JSON date_in
+            CASE
+                WHEN ra.hire_vehicle_date_in IS NOT NULL
+                    AND EXISTS (
+                        SELECT 1
                         FROM jsonb_array_elements(ra.change_vehicle_history::jsonb) AS j
                         WHERE NULLIF(j->>'date_out','') IS NOT NULL
                     )
-                ) AS hire_start_date
+                    AND NOT EXISTS (
+                        SELECT 1
+                        FROM jsonb_array_elements(ra.change_vehicle_history::jsonb) AS j
+                        WHERE NULLIF(j->>'date_in','') IS NOT NULL
+                    )
+                THEN NULL
+                ELSE GREATEST(
+                    ra.hire_vehicle_date_in,
+                    (
+                        SELECT MAX((NULLIF(j->>'date_in',''))::date)
+                        FROM jsonb_array_elements(ra.change_vehicle_history::jsonb) AS j
+                        WHERE NULLIF(j->>'date_in','') IS NOT NULL
+                    )
+                )
+            END AS hire_end_date,
 
-            FROM claims c
+            -- hire_start_date: earliest of hire_vehicle_date_out and JSON date_out
+            LEAST(
+                ra.hire_vehicle_date_out,
+                (
+                    SELECT MIN((NULLIF(j->>'date_out',''))::date)
+                    FROM jsonb_array_elements(ra.change_vehicle_history::jsonb) AS j
+                    WHERE NULLIF(j->>'date_out','') IS NOT NULL
+                )
+            ) AS hire_start_date,
 
-            LEFT JOIN (
-                SELECT DISTINCT ON (claim_id)
-                    id,
-                    claim_id,
-                    invoice_datetime,
-                    info
-                FROM invoice
-                ORDER BY claim_id, invoice_datetime DESC
-            ) i
-            ON c.claim_id = i.claim_id
+            -- latest vehicle reg: checks BOTH main hire vehicle AND change_vehicle_history
+            (
+                SELECT vehicle_reg
+                FROM (
+                    -- Main hire vehicle from rental_agreements
+                    SELECT 
+                        ra.hire_vehicle_reg AS vehicle_reg,
+                        ra.hire_vehicle_date_out AS date_out
+                    WHERE NULLIF(ra.hire_vehicle_reg, '') IS NOT NULL
+                      AND ra.hire_vehicle_date_out IS NOT NULL
 
-            LEFT JOIN rental_agreements ra
-            ON c.claim_id = ra.claim_id
+                    UNION ALL
 
-            WHERE c.recently_deleted = FALSE;
-        """
+                    -- All vehicles from change_vehicle_history JSON
+                    SELECT 
+                        j->>'vehicle_reg' AS vehicle_reg,
+                        (NULLIF(j->>'date_out', ''))::date AS date_out
+                    FROM jsonb_array_elements(ra.change_vehicle_history::jsonb) AS j
+                    WHERE NULLIF(j->>'date_out', '') IS NOT NULL
+                      AND NULLIF(j->>'vehicle_reg', '') IS NOT NULL
 
+                ) AS all_vehicles
+                ORDER BY date_out DESC
+                LIMIT 1
+            ) AS latest_vehicle_reg
+
+        FROM claims c
+
+        LEFT JOIN (
+            SELECT DISTINCT ON (claim_id)
+                id,
+                claim_id,
+                invoice_datetime,
+                info
+            FROM invoice
+            ORDER BY claim_id, invoice_datetime DESC
+        ) i
+        ON c.claim_id = i.claim_id
+
+        LEFT JOIN rental_agreements ra
+        ON c.claim_id = ra.claim_id
+
+        WHERE c.recently_deleted = FALSE;
+    """
         with self.conn.cursor() as cur:
             cur.execute(query)
             rows = cur.fetchall()
