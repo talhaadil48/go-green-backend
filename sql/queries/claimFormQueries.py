@@ -502,20 +502,93 @@ class ClaimFormQueries:
                 FROM rental_agreements
                 WHERE claim_id = %s;
             """
+            print(f"[DEBUG] Fetching existing rental for claim_id={claim_id}")
+
             with self.conn.cursor() as cur:
                 cur.execute(query, (claim_id,))
                 row = cur.fetchone()
+
                 if not row:
+                    print("[DEBUG] No existing rental found")
                     return {}
 
                 cols = [d[0] for d in cur.description]
                 result = dict(zip(cols, row))
 
+                print(f"[DEBUG] Raw DB result: {result}")
+
                 if result.get("change_vehicle_history") and isinstance(result["change_vehicle_history"], str):
-                    result["change_vehicle_history"] = json.loads(result["change_vehicle_history"])
+                    try:
+                        result["change_vehicle_history"] = json.loads(result["change_vehicle_history"])
+                        print("[DEBUG] Parsed change_vehicle_history JSON successfully")
+                    except Exception as e:
+                        print(f"[ERROR] Failed to parse change_vehicle_history: {e}")
+                        result["change_vehicle_history"] = []
 
                 return result
 
+
+            # ---------------------------
+
+        existing = get_existing_rental()
+        print(f"[DEBUG] Existing rental data: {existing}")
+
+        # --- OLD REGS ---
+        old_regs = set()
+
+        if existing.get("hire_vehicle_reg"):
+            old_regs.add(existing["hire_vehicle_reg"])
+
+        old_history = existing.get("change_vehicle_history", []) or []
+        for ch in old_history:
+            reg = ch.get("vehicle_reg")
+            if reg:
+                old_regs.add(reg)
+
+        print(f"[DEBUG] Old vehicle regs: {old_regs}")
+
+        # --- NEW REGS ---
+        new_regs = set()
+
+        hire_reg = data.get("hire_vehicle_reg") or data.get("hire_vechicle_reg")
+        if hire_reg:
+            new_regs.add(hire_reg)
+
+        change_history = data.get("change_vehicle_history", [])
+        if isinstance(change_history, str):
+            try:
+                change_history = json.loads(change_history)
+                print("[DEBUG] Parsed incoming change_vehicle_history JSON")
+            except Exception as e:
+                print(f"[ERROR] Failed to parse incoming change_vehicle_history: {e}")
+                change_history = []
+
+        for ch in change_history:
+            reg = ch.get("vehicle_reg")
+            if reg:
+                new_regs.add(reg)
+
+        print(f"[DEBUG] New vehicle regs: {new_regs}")
+
+        # --- ONLY CHECK NEWLY INTRODUCED REGS ---
+        regs_to_check = new_regs - old_regs
+        print(f"[DEBUG] Regs to check (new - old): {regs_to_check}")
+
+        for reg in regs_to_check:
+            print(f"[DEBUG] Checking availability for vehicle: {reg}")
+
+            status = self.check_is_available(reg)
+            print(f"[DEBUG] Availability result: {status}")
+
+            if not status["exists"]:
+                print(f"[ERROR] Vehicle {reg} does not exist")
+                raise ValueError(f"Vehicle {reg} does not exist")
+
+            if not status["is_available"]:
+                print(f"[ERROR] Vehicle {reg} is occupied by claim_id {status['claim_id']}")
+                raise ValueError(
+                    f"Vehicle {reg} is already occupied by claim_id {status['claim_id']}"
+                )
         def handle_fleet_history(reg, old_out, old_in, new_out, new_in, miles_out_val, miles_in_val):
             # invalid case
             if new_in and not new_out:
@@ -635,10 +708,7 @@ class ClaimFormQueries:
                         comp_new = None if new_val == "" else new_val
                         
                         if comp_old != comp_new:
-                            print(f"[CHANGE DETECTED] Field: '{col}' | Old: {repr(old_val)} -> New: {repr(new_val)}")
                             changed_fields.append(col)
-                        else:
-                            print(f"[NO CHANGE]       Field: '{col}' | Old: {repr(old_val)} -> New: {repr(new_val)}")
                 else:
                     changed_fields = fields_to_update.copy()
 
@@ -820,6 +890,51 @@ class ClaimFormQueries:
             self.conn.rollback()
             return None
         
+
+    def check_is_available(self, vehicle_reg: str):
+        query = """
+            SELECT 
+                c.is_available,
+                ra.claim_id AS current_holder_claim_id
+            FROM cars c
+            LEFT JOIN LATERAL (
+                SELECT r.claim_id
+                FROM rental_agreements r
+                WHERE (
+                    r.hire_vehicle_reg = c.reg_no 
+                    AND r.hire_vehicle_date_out IS NOT NULL 
+                    AND r.hire_vehicle_date_in IS NULL
+                )
+                OR EXISTS (
+                    SELECT 1
+                    FROM jsonb_array_elements(r.change_vehicle_history) AS ch
+                    WHERE ch->>'vehicle_reg' = c.reg_no
+                    AND ch->>'date_out' IS NOT NULL
+                    AND (ch->>'date_in' = '' OR ch->>'date_in' IS NULL)
+                )
+                ORDER BY r.rental_agreement_id DESC
+                LIMIT 1
+            ) ra ON TRUE
+            WHERE c.reg_no = %s;
+        """
+        with self.conn.cursor() as cur:
+            cur.execute(query, (vehicle_reg,))
+            row = cur.fetchone()
+
+            if not row:
+                return {
+                    "exists": False,
+                    "is_available": False,
+                    "claim_id": None
+                }
+
+            is_available, claim_id = row
+            return {
+                "exists": True,
+                "is_available": is_available,
+                "claim_id": claim_id
+            }
+
     def upsert_claim_documents(self, claim_id: str, documents: dict) -> None:
         query = """
         INSERT INTO claim_documents (claim_id, documents)

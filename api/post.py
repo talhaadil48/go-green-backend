@@ -335,7 +335,24 @@ async def upsert_rental_agreement(request: Request) -> Dict[str, Any]:
     conn = DBConnection.get_connection()
     queries = Queries(conn)
 
-    result = queries.upsert_rental_agreement(claim_id, update_data)
+    try:
+        result = queries.upsert_rental_agreement(claim_id, update_data)
+
+    except ValueError as e:
+        # Business logic error (vehicle not available, etc.)
+        print("Business logic error:", e)
+        raise HTTPException(
+            status_code=409,  # conflict (better than 400 here)
+            detail=str(e)
+        )
+
+    except Exception as e:
+        # Unexpected server error
+        print("Unexpected error:", e)
+        raise HTTPException(
+            status_code=500,
+            detail="Internal server error"
+        )
 
     if not result:
         raise HTTPException(status_code=500, detail="Failed to save rental agreement")
