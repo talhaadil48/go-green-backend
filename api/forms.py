@@ -1977,3 +1977,23 @@ async def create_claim_history(claim_id: str, data: ClaimChangeCreate):
     )
 
     return {"message": "Claim change history added successfully"}
+
+
+class PaymentUpdate(BaseModel):
+    claim_id: str
+    payment_date: str | None
+
+@router.post("/long_hire_invoice/update_payment_date")
+async def update_payment_date(data: PaymentUpdate):
+    conn = DBConnection.get_connection()
+    queries = Queries(conn)
+
+    success = queries.update_payment_date(
+        data.claim_id,
+        data.payment_date
+    )
+
+    if not success:
+        return {"success": False, "message": "No record found or update failed"}
+
+    return {"success": True, "message": "Payment date updated"}

@@ -937,7 +937,7 @@ class ClaimFormQueries:
 
     def upsert_claim_documents(self, claim_id: str, documents: dict) -> None:
         query = """
-        INSERT INTO claim_documents (claim_id, documents)
+        INSERT INTO claim_documents (claim_id, documents)w
         VALUES (%s, %s)
         ON CONFLICT (claim_id)
         DO UPDATE
@@ -1671,6 +1671,7 @@ class ClaimFormQueries:
                 cur.execute(query, (starting_date, ending_date, hirer_name))
                 long_claim_id = cur.fetchone()[0]
                 self.conn.commit()
+                self.insert_long_hire_invoice(claim_id=long_claim_id, amount=0 , user_name=None )
             return long_claim_id
         except Exception as e:
             self.conn.rollback()
@@ -2232,35 +2233,63 @@ class ClaimFormQueries:
                 return None
             (invoice_total,) = row
             return invoice_total
-
-
     def insert_long_hire_invoice(self, claim_id: str, amount: float, user_name: str) -> int:
+        check_query = """
+            SELECT id FROM long_hire_invoices WHERE claim_id = %s;
+        """
+
         insert_query = """
             INSERT INTO long_hire_invoices (claim_id, amount, date_sent, user_name)
-            VALUES (%s, %s, CURRENT_DATE, %s)
+            VALUES (%s, %s, NULL, %s)
             RETURNING id;
         """
+
+        update_invoice_query = """
+            UPDATE long_hire_invoices
+            SET amount = %s,
+                user_name = %s,
+                date_sent = CURRENT_DATE
+            WHERE claim_id = %s
+            RETURNING id;
+        """
+
         update_claim_query = """
             UPDATE long_claims
             SET invoice_sent = TRUE,
                 date_sent = CURRENT_DATE
             WHERE id = %s;
         """
+
         try:
             with self.conn.cursor() as cur:
-                cur.execute(insert_query, (claim_id, amount, user_name))
-                invoice_id = cur.fetchone()[0]
+                # Check if claim_id already exists
+                cur.execute(check_query, (claim_id,))
+                existing = cur.fetchone()
 
-                cur.execute(update_claim_query, (claim_id,))
-                
+                if existing:
+                    # UPDATE path: set date_sent + update all values + update long_claims
+                    cur.execute(update_invoice_query, (amount, user_name, claim_id))
+                    invoice_id = cur.fetchone()[0]
+
+                    cur.execute(update_claim_query, (claim_id,))
+
+                    if cur.rowcount == 0:
+                        self.conn.rollback()
+                        print("Claim ID does not exist in long_claims")
+                        return 0
+
+                else:
+                    # INSERT path: keep date_sent as NULL, skip update_claim_query
+                    cur.execute(insert_query, (claim_id, amount, user_name))
+                    invoice_id = cur.fetchone()[0]
+
                 self.conn.commit()
                 return invoice_id
+
         except Exception as e:
-            print(f"Error inserting long hire invoice and updating claim: {e}")
+            print(f"Error in upsert: {e}")
             self.conn.rollback()
             return 0
-
-
     def get_all_long_hire_invoices(self) -> List[Dict[str, Any]]:
         query = """
             SELECT 
@@ -2269,7 +2298,8 @@ class ClaimFormQueries:
                 lc.hirer_name,
                 lhi.amount,
                 lhi.date_sent,
-                lhi.user_name
+                lhi.user_name,
+                lhi.payment_date
             FROM long_hire_invoices lhi
             LEFT JOIN long_claims lc ON lhi.claim_id = lc.id
             ORDER BY lhi.date_sent DESC;
@@ -2966,3 +2996,25 @@ class ClaimFormQueries:
             self.conn.rollback()
             print("Error inserting claim change:", e)
             raise
+    
+
+    def update_payment_date(self, claim_id: str, payment_date: str) -> bool:
+        query = """
+            UPDATE long_hire_invoices
+            SET payment_date = %s
+            WHERE claim_id = %s;
+        """
+
+        try:
+            with self.conn.cursor() as cur:
+                cur.execute(query, (payment_date, claim_id))
+                self.conn.commit()
+                return cur.rowcount > 0
+
+        except Exception as e:
+            print(f"Error updating payment_date: {e}")
+            self.conn.rollback()
+            return False
+        
+
+
