@@ -937,7 +937,7 @@ class ClaimFormQueries:
 
     def upsert_claim_documents(self, claim_id: str, documents: dict) -> None:
         query = """
-        INSERT INTO claim_documents (claim_id, documents)w
+        INSERT INTO claim_documents (claim_id, documents)
         VALUES (%s, %s)
         ON CONFLICT (claim_id)
         DO UPDATE
