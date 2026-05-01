@@ -78,7 +78,7 @@ class ClaimFormQueries:
                         if comp_old != comp_new:
                             changed_fields.append(col)
                 else:
-                    changed_fields = fields_to_update.copy()
+                    changed_fields = [col for col in fields_to_update if data.get(col) is not None and data.get(col) != "" and data.get(col) != 'No' and data.get(col) != [] and data.get(col) != False]
 
                 params = {"claim_id": claim_id, **{k: data[k] for k in fields_to_update}}
 
@@ -176,7 +176,7 @@ class ClaimFormQueries:
                         if comp_old != comp_new:
                             changed_fields.append(col)
                 else:
-                    changed_fields = fields_to_update.copy()
+                    changed_fields = [col for col in fields_to_update if data.get(col) is not None and data.get(col) != "" and data.get(col) != 'No' and data.get(col) != [] and data.get(col) != False]
 
                 params = {
                     "claim_id": claim_id,
@@ -269,7 +269,7 @@ class ClaimFormQueries:
                         if comp_old != comp_new:
                             changed_fields.append(col)
                 else:
-                    changed_fields = fields_to_update.copy()
+                    changed_fields = [col for col in fields_to_update if data.get(col) is not None and data.get(col) != "" and data.get(col) != 'No' and data.get(col) != [] and data.get(col) != False]
 
                 params = {"claim_id": claim_id, **{k: data[k] for k in fields_to_update}}
 
@@ -362,7 +362,7 @@ class ClaimFormQueries:
                         else:
                             print(f"[NO CHANGE]       Field: '{col}' | Old: {repr(old_val)} -> New: {repr(new_val)}")
                 else:
-                    changed_fields = fields_to_update.copy()
+                    changed_fields = [col for col in fields_to_update if data.get(col) is not None and data.get(col) != "" and data.get(col) != 'No' and data.get(col) != [] and data.get(col) != False]
 
                 params = {"claim_id": claim_id, **{k: cleaned_data[k] for k in fields_to_update}}
 
@@ -708,9 +708,13 @@ class ClaimFormQueries:
                         comp_new = None if new_val == "" else new_val
                         
                         if comp_old != comp_new:
+                            print(f"[DEBUG] CHANGE detected in '{col}': OLD = {comp_old}, NEW = {comp_new}")
                             changed_fields.append(col)
+                        else:
+                            print(f"[DEBUG] NO CHANGE in '{col}': value remains {comp_old}")
                 else:
-                    changed_fields = fields_to_update.copy()
+                    
+                    changed_fields = [col for col in fields_to_update if data.get(col) is not None and data.get(col) != "" and data.get(col) != 'No' and data.get(col) != [] and data.get(col) != False]
 
                 if record_exists:
                     # 2a. UPDATE existing entry
