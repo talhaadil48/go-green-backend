@@ -826,10 +826,10 @@ class ClaimFormQueries:
                 all_entries = []
 
                 if hire_out or hire_in:
-                    all_entries.append({
+                  all_entries.append({
                         "vehicle_reg": hire_reg,
-                        "date_out": parse_date(hire_out), # Note: assuming parse_date is imported/available in the class scope
-                        "date_in": parse_date(hire_in)
+                        "date_out": parse_date(hire_out) if hire_out else None, 
+                        "date_in": parse_date(hire_in) if hire_in else None
                     })
 
                 for change in new_history:
@@ -842,7 +842,6 @@ class ClaimFormQueries:
                             "date_out": out_date,
                             "date_in": in_date
                         })
-
                 latest_entry = max(
                     (e for e in all_entries if e.get("date_out")),
                     key=lambda x: x["date_out"],
