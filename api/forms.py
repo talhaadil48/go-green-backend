@@ -2032,3 +2032,22 @@ async def sync_car_service_miles(car_id: int):
         }
     
 
+
+class MotDocUpdate(BaseModel):
+    car_id: int
+    mot_doc: str
+
+@router.post("/car/upload_mot_doc")
+async def upload_mot_doc(data: MotDocUpdate):
+    conn = DBConnection.get_connection()
+    queries = Queries(conn)
+
+    success = queries.update_mot_doc(
+        data.car_id,
+        data.mot_doc
+    )
+
+    if not success:
+        return {"success": False, "message": "Car not found or update failed"}
+
+    return {"success": True, "message": "MOT document link updated"}

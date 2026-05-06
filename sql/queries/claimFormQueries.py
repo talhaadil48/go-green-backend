@@ -3226,3 +3226,22 @@ class ClaimFormQueries:
                 })
 
         return due_cars
+
+
+    def update_mot_doc(self, car_id: int, mot_doc: str) -> bool:
+        query = """
+            UPDATE cars
+            SET mot_doc = %s
+            WHERE id = %s;
+        """
+
+        try:
+            with self.conn.cursor() as cur:
+                cur.execute(query, (mot_doc, car_id))
+                self.conn.commit()
+                return cur.rowcount > 0
+
+        except Exception as e:
+            print(f"Error updating mot_doc: {e}")
+            self.conn.rollback()
+            return False
