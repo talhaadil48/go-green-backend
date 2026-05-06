@@ -827,19 +827,24 @@ class CarUpdate(BaseModel):
     model: Optional[str] = None
     name: Optional[str] = None
     service_time: Optional[str] = None
-    attributes: Optional[List[str]] = []
+    attributes: Optional[List[str]] = None
+    mot_date: Optional[str] = None
+    current_miles: Optional[int] = None
 
 @router.put("/car/{car_id}")
 async def update_car(car_id: int, payload: CarUpdate):
     conn = DBConnection.get_connection()
     queries = Queries(conn)
+
     try:
         updated = queries.update_car(
             car_id,
             payload.model,
             payload.name,
             payload.service_time,
-            payload.attributes if payload.attributes is not None else []
+            payload.attributes,
+            payload.mot_date,
+            payload.current_miles
         )
     except Exception as e:
         conn.rollback()
@@ -1997,3 +2002,33 @@ async def update_payment_date(data: PaymentUpdate):
         return {"success": False, "message": "No record found or update failed"}
 
     return {"success": True, "message": "Payment date updated"}
+
+@router.put("/cars/{car_id}/sync-service-miles")
+async def sync_car_service_miles(car_id: int):
+    conn = DBConnection.get_connection()
+    
+    try:
+        queries = Queries(conn)
+        updated_car = queries.sync_last_service_miles(car_id)
+        
+        if not updated_car:
+            return {
+                "success": False,
+                "message": "Car not found"
+            }
+            
+        # Commit the transaction to save the UPDATE
+        conn.commit()
+
+        return {
+            "success": True,
+            "data": updated_car
+        }
+    except Exception as e:
+        conn.rollback() # Rollback on error
+        return {
+            "success": False,
+            "error": str(e)
+        }
+    
+

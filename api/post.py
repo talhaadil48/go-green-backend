@@ -616,3 +616,26 @@ async def unlock_claim(claim_id: str, request: Request):
     )
 
     return {"status": "ok"}
+
+
+
+
+@router.get("/cars/service-due")
+async def get_cars_due_for_service(threshold: int = 8000):
+    conn = DBConnection.get_connection()
+    
+    try:
+        queries = Queries(conn)
+        due_cars = queries.get_cars_due_for_service(threshold)
+
+        return {
+            "success": True,
+            "threshold": threshold,
+            "count": len(due_cars),
+            "data": due_cars
+        }
+    except Exception as e:
+        return {
+            "success": False,
+            "error": str(e)
+        }
