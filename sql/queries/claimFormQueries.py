@@ -806,23 +806,33 @@ class ClaimFormQueries:
                 hire_out = result.get("hire_vehicle_date_out")
                 hire_in = result.get("hire_vehicle_date_in")
                 hire_reg = result.get("hire_vehicle_reg")
+                same_out_already_exists = old_out is not None and hire_out is not None
+                same_in_already_exists = old_in is not None and hire_in is not None
 
-                # NEW LOGIC: If both dates were null before and now both are provided together → don't make available
-                was_both_null = (old_out is None and old_in is None)
-                is_now_both_present = (hire_out is not None and hire_in is not None)
+                # If all provided values already existed → do nothing
+                if (
+                    (hire_out is None or same_out_already_exists) and
+                    (hire_in is None or same_in_already_exists)
+                ):
+                    print("[DEBUG] No change in hire vehicle dates, skipping availability update")
+                else:
 
-                if hire_out and hire_in:
-                    self.update_claim_status(claim_id, "hire end")
+                    # NEW LOGIC: If both dates were null before and now both are provided together → don't make available
+                    was_both_null = (old_out is None and old_in is None)
+                    is_now_both_present = (hire_out is not None and hire_in is not None)
 
-                    # Don't mark car available if it was a new complete hire (both dates at once)
-                    if not (was_both_null and is_now_both_present):
+                    if hire_out and hire_in:
+                        self.update_claim_status(claim_id, "hire end")
+
+                        # Don't mark car available if it was a new complete hire (both dates at once)
+                        if not (was_both_null and is_now_both_present):
+                            if hire_reg:
+                                self.update_is_available(hire_reg, True)
+
+                    elif hire_out:
+                        self.update_claim_status(claim_id, "hire start")
                         if hire_reg:
-                            self.update_is_available(hire_reg, True)
-
-                elif hire_out:
-                    self.update_claim_status(claim_id, "hire start")
-                    if hire_reg:
-                        self.update_is_available(hire_reg, False)
+                            self.update_is_available(hire_reg, False)
 
 
                 # Combine hire vehicle info and change history into a single list
@@ -867,6 +877,15 @@ class ClaimFormQueries:
                         reg = change.get("vehicle_reg")
                         out_date = change.get("date_out")
                         in_date = change.get("date_in")
+                        same_out_already_exists = old_out is not None and out_date is not None
+                        same_in_already_exists = old_in is not None and in_date is not None
+
+                        # Skip ONLY if every provided field already existed
+                        if (
+                            (out_date is None or same_out_already_exists) and
+                            (in_date is None or same_in_already_exists)
+                        ):
+                            continue
 
                         if not reg:
                             continue
