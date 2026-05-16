@@ -492,6 +492,7 @@ class ClaimFormQueries:
 
 
     def upsert_rental_agreement(self, claim_id: str, data: dict) -> dict | None:
+        
         def get_existing_rental():
             query = """
                 SELECT
@@ -527,8 +528,71 @@ class ClaimFormQueries:
 
                 return result
 
+        def handle_fleet_history(reg, old_out, old_in, new_out, new_in, miles_out_val, miles_in_val):
+            # invalid case
+            if new_in and not new_out:
+                return
 
-            # ---------------------------
+            # prevent changing date_out
+            if old_out and new_out and old_out != new_out:
+                print("CASE")
+                return
+            
+            # CASE 1: both null → insert
+            if not old_out and not old_in:
+                if new_out and not new_in:
+                    self.insert_fleet_history(new_out, None, claim_id, reg, miles_in_val, miles_out_val)
+                elif new_out and new_in:
+                    self.insert_fleet_history(new_out, new_in, claim_id, reg, miles_in_val, miles_out_val)
+
+            # CASE 2: out exists, in null → update
+            elif old_out and not old_in:
+                if new_out and new_in:
+                    self.update_fleet_history_hire_end(new_in, claim_id, reg, old_out, miles_in_val, miles_out_val)
+
+            # CASE 3: both exist → do nothing
+            elif old_out and old_in:
+                print("CASE 3")
+                print(f"old_out: {old_out}, old_in: {old_in}, new_out: {new_out}, new_in: {new_in}")
+                print("miles_in_val", miles_in_val, "miles_out_val", miles_out_val)
+                print("reg", reg)
+                self.update_fleet_history_hire_end(old_in, claim_id, reg, old_out, miles_in_val, miles_out_val)
+
+        def recalculate_car_availability(reg_no: str):
+            if not reg_no:
+                return
+
+            query = """
+                SELECT 1
+                FROM rental_agreements r
+                WHERE (
+                    -- 1. NATIVE COLUMNS: Only check for IS NOT NULL and IS NULL
+                    r.hire_vehicle_reg = %s 
+                    AND r.hire_vehicle_date_out IS NOT NULL 
+                    AND r.hire_vehicle_date_in IS NULL
+                )
+                OR EXISTS (
+                    -- 2. JSON COLUMNS: Check for NULL, empty strings '', and "null" strings
+                    SELECT 1
+                    FROM jsonb_array_elements(r.change_vehicle_history) AS ch
+                    WHERE ch->>'vehicle_reg' = %s
+                    AND ch->>'date_out' IS NOT NULL 
+                    AND ch->>'date_out' != ''
+                    AND (ch->>'date_in' IS NULL OR ch->>'date_in' = '' OR ch->>'date_in' = 'null')
+                )
+                LIMIT 1;
+            """
+            with self.conn.cursor() as cur:
+                cur.execute(query, (reg_no, reg_no))
+                is_currently_hired = cur.fetchone() is not None
+
+            # If it is currently hired out, it's NOT available.
+            is_available = not is_currently_hired
+            self.update_is_available(reg_no, is_available)
+            print(f"[DEBUG] Recalculated availability for {reg_no}: {is_available}")
+        # ---------------------------
+        # START MAIN EXECUTION
+        # ---------------------------
 
         existing = get_existing_rental()
         print(f"[DEBUG] Existing rental data: {existing}")
@@ -589,38 +653,8 @@ class ClaimFormQueries:
                 raise ValueError(
                     f"Vehicle {reg} is already occupied by claim_id {status['claim_id']}"
                 )
-        def handle_fleet_history(reg, old_out, old_in, new_out, new_in, miles_out_val, miles_in_val):
-            # invalid case
-            if new_in and not new_out:
-                return
 
-            # prevent changing date_out
-            if old_out and new_out and old_out != new_out:
-                print("CASE")
-                return
-            
-            # CASE 1: both null → insert
-            if not old_out and not old_in:
-                if new_out and not new_in:
-                    self.insert_fleet_history(new_out, None, claim_id, reg, miles_in_val, miles_out_val)
-                elif new_out and new_in:
-                    self.insert_fleet_history(new_out, new_in, claim_id, reg, miles_in_val, miles_out_val)
-
-            # CASE 2: out exists, in null → update
-            elif old_out and not old_in:
-                if new_out and new_in:
-                    self.update_fleet_history_hire_end(new_in, claim_id, reg, old_out, miles_in_val, miles_out_val)
-
-            # CASE 3: both exist → do nothing
-            elif old_out and old_in:
-                print("CASE 3")
-                print(f"old_out: {old_out}, old_in: {old_in}, new_out: {new_out}, new_in: {new_in}")
-                print("miles_in_val", miles_in_val, "miles_out_val", miles_out_val)
-                print("reg", reg)
-                self.update_fleet_history_hire_end(old_in, claim_id, reg, old_out, miles_in_val, miles_out_val)
-
-        existing = get_existing_rental()
-
+        # --- PREPARE DATA FOR DB ---
         updatable_columns = [
             "hirer_name", "title", "permanent_address",
             "additional_driver_name", "licence_no",
@@ -713,7 +747,6 @@ class ClaimFormQueries:
                         else:
                             print(f"[DEBUG] NO CHANGE in '{col}': value remains {comp_old}")
                 else:
-                    
                     changed_fields = [col for col in fields_to_update if data.get(col) is not None and data.get(col) != "" and data.get(col) != 'No' and data.get(col) != [] and data.get(col) != False]
 
                 if record_exists:
@@ -772,7 +805,6 @@ class ClaimFormQueries:
                 # ---------------------------
                 # 🔁 CHANGE VEHICLE HISTORY
                 # ---------------------------
-                old_history = existing.get("change_vehicle_history", []) or []
                 new_history = result.get("change_vehicle_history")
 
                 if isinstance(new_history, str):
@@ -785,77 +817,61 @@ class ClaimFormQueries:
                 }
 
                 for change in new_history:
-                    reg = change.get("vehicle_reg")
-                    new_out = change.get("date_out")
-                    new_in = change.get("date_in")
+                    change_reg = change.get("vehicle_reg")
+                    change_new_out = change.get("date_out")
+                    change_new_in = change.get("date_in")
 
-                    if not reg:
+                    if not change_reg:
                         continue
 
-                    old = old_map.get((reg, new_out), {})
-                    old_out = old.get("date_out")
-                    old_in = old.get("date_in")
+                    old = old_map.get((change_reg, change_new_out), {})
+                    change_old_out = old.get("date_out")
+                    change_old_in = old.get("date_in")
                     miles_in = change.get("miles_in")
                     miles_out = change.get("miles_out")
 
-                    handle_fleet_history(reg, old_out, old_in, new_out, new_in, miles_out, miles_in)
+                    handle_fleet_history(change_reg, change_old_out, change_old_in, change_new_out, change_new_in, miles_out, miles_in)
+
 
                 # ---------------------------
-                # 🚗 AVAILABILITY LOGIC
+                # 🚗 NEW AVAILABILITY LOGIC 
                 # ---------------------------
+                # Combine both old regs (in case a car was removed/changed) and new regs
+                all_regs_to_recalculate = old_regs.union(new_regs)
+                
+                for r in all_regs_to_recalculate:
+                    # Dynamically check true state across the DB for each affected car
+                    recalculate_car_availability(r)
+
+
+                # ---------------------------
+                # 📊 CLAIM STATUS LOGIC
+                # ---------------------------
+                # Combine hire vehicle info and change history into a single list to find the latest
                 hire_out = result.get("hire_vehicle_date_out")
                 hire_in = result.get("hire_vehicle_date_in")
                 hire_reg = result.get("hire_vehicle_reg")
-                same_out_already_exists = old_out is not None and hire_out is not None
-                same_in_already_exists = old_in is not None and hire_in is not None
 
-                # If all provided values already existed → do nothing
-                if (
-                    (hire_out is None or same_out_already_exists) and
-                    (hire_in is None or same_in_already_exists)
-                ):
-                    print("[DEBUG] No change in hire vehicle dates, skipping availability update")
-                else:
-
-                    # NEW LOGIC: If both dates were null before and now both are provided together → don't make available
-                    was_both_null = (old_out is None and old_in is None)
-                    is_now_both_present = (hire_out is not None and hire_in is not None)
-
-                    if hire_out and hire_in:
-                        self.update_claim_status(claim_id, "hire end")
-
-                        # Don't mark car available if it was a new complete hire (both dates at once)
-                        if not (was_both_null and is_now_both_present):
-                            if hire_reg:
-                                self.update_is_available(hire_reg, True)
-
-                    elif hire_out:
-                        self.update_claim_status(claim_id, "hire start")
-                        if hire_reg:
-                            self.update_is_available(hire_reg, False)
-
-
-                # Combine hire vehicle info and change history into a single list
-                # Convert dates when building all_entries
                 all_entries = []
 
                 if hire_out or hire_in:
-                  all_entries.append({
+                    all_entries.append({
                         "vehicle_reg": hire_reg,
                         "date_out": parse_date(hire_out) if hire_out else None, 
                         "date_in": parse_date(hire_in) if hire_in else None
                     })
 
                 for change in new_history:
-                    reg = change.get("vehicle_reg")
+                    change_reg = change.get("vehicle_reg")
                     out_date = parse_date(change.get("date_out"))
                     in_date = parse_date(change.get("date_in"))
-                    if reg and (out_date or in_date):
+                    if change_reg and (out_date or in_date):
                         all_entries.append({
-                            "vehicle_reg": reg,
+                            "vehicle_reg": change_reg,
                             "date_out": out_date,
                             "date_in": in_date
                         })
+
                 latest_entry = max(
                     (e for e in all_entries if e.get("date_out")),
                     key=lambda x: x["date_out"],
@@ -869,40 +885,6 @@ class ClaimFormQueries:
                     elif latest_entry.get("date_out") and latest_entry.get("date_in"):
                         self.update_claim_status(claim_id, "hire end")
 
-                # ---------------------------
-                # 🔁 CHANGE VEHICLE AVAILABILITY LOGIC (with new rule)
-                # ---------------------------
-                if new_history:
-                    for change in new_history:
-                        reg = change.get("vehicle_reg")
-                        out_date = change.get("date_out")
-                        in_date = change.get("date_in")
-                        same_out_already_exists = old_out is not None and out_date is not None
-                        same_in_already_exists = old_in is not None and in_date is not None
-
-                        # Skip ONLY if every provided field already existed
-                        if (
-                            (out_date is None or same_out_already_exists) and
-                            (in_date is None or same_in_already_exists)
-                        ):
-                            continue
-
-                        if not reg:
-                            continue
-
-                        # NEW LOGIC for change history:
-                        # If there was NO previous entry AND we are adding both date_out + date_in together
-                        # → Do NOT mark the car as available
-                        old_entry = old_map.get((reg, out_date), {})
-                        was_no_previous_entry = (old_entry.get("date_out") is None and old_entry.get("date_in") is None)
-                        is_complete_hire_now = (out_date is not None and in_date is not None)
-
-                        if out_date and in_date:
-                            print(out_date,in_date,was_no_previous_entry)
-                            if not (was_no_previous_entry and is_complete_hire_now):
-                                self.update_is_available(reg, True)
-                        elif out_date:
-                            self.update_is_available(reg, False)
 
                 self.conn.commit()
                 self.refresh_rental_agreements_view()
@@ -912,7 +894,8 @@ class ClaimFormQueries:
             print(f"Error in upsert_rental_agreement: {e}")
             self.conn.rollback()
             return None
-        
+
+
 
     def check_is_available(self, vehicle_reg: str):
         query = """
