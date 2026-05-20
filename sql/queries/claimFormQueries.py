@@ -1100,7 +1100,6 @@ class ClaimFormQueries:
                 return dict(zip(columns, row))
         return None
     
-    
     def get_all_claims(self) -> list[dict]:
         query = """
         SELECT
@@ -1111,20 +1110,17 @@ class ClaimFormQueries:
             i.invoice_datetime,
             i.info,
 
-            -- hire_end_date: latest of hire_vehicle_date_in and JSON date_in
+            -- hire_end_date: there are 3 cases:
+            -- 1. If hire_vehicle_date_in IS NULL => NULL
+            -- 2. If ANY change_vehicle_history date_in is '' (empty string) => NULL
+            -- 3. Otherwise, GREATEST of all available date_in values
             CASE
-                WHEN ra.hire_vehicle_date_in IS NOT NULL
-                    AND EXISTS (
-                        SELECT 1
-                        FROM jsonb_array_elements(ra.change_vehicle_history::jsonb) AS j
-                        WHERE NULLIF(j->>'date_out','') IS NOT NULL
-                    )
-                    AND NOT EXISTS (
-                        SELECT 1
-                        FROM jsonb_array_elements(ra.change_vehicle_history::jsonb) AS j
-                        WHERE NULLIF(j->>'date_in','') IS NOT NULL
-                    )
-                THEN NULL
+                WHEN ra.hire_vehicle_date_in IS NULL THEN NULL
+                WHEN EXISTS (
+                    SELECT 1
+                    FROM jsonb_array_elements(ra.change_vehicle_history::jsonb) AS j
+                    WHERE j->>'date_in' = ''
+                ) THEN NULL
                 ELSE GREATEST(
                     ra.hire_vehicle_date_in,
                     (
@@ -1154,7 +1150,7 @@ class ClaimFormQueries:
                         ra.hire_vehicle_reg AS vehicle_reg,
                         ra.hire_vehicle_date_out AS date_out
                     WHERE NULLIF(ra.hire_vehicle_reg, '') IS NOT NULL
-                      AND ra.hire_vehicle_date_out IS NOT NULL
+                    AND ra.hire_vehicle_date_out IS NOT NULL
 
                     UNION ALL
 
@@ -1164,7 +1160,7 @@ class ClaimFormQueries:
                         (NULLIF(j->>'date_out', ''))::date AS date_out
                     FROM jsonb_array_elements(ra.change_vehicle_history::jsonb) AS j
                     WHERE NULLIF(j->>'date_out', '') IS NOT NULL
-                      AND NULLIF(j->>'vehicle_reg', '') IS NOT NULL
+                    AND NULLIF(j->>'vehicle_reg', '') IS NOT NULL
 
                 ) AS all_vehicles
                 ORDER BY date_out DESC
@@ -1188,13 +1184,12 @@ class ClaimFormQueries:
         ON c.claim_id = ra.claim_id
 
         WHERE c.recently_deleted = FALSE;
-    """
+        """
         with self.conn.cursor() as cur:
             cur.execute(query)
             rows = cur.fetchall()
             columns = [desc[0] for desc in cur.description]
             return [dict(zip(columns, row)) for row in rows]
-
 
         
     def get_claim_by_id(self, claim_id: str) -> dict | None:
