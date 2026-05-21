@@ -2035,7 +2035,7 @@ async def sync_car_service_miles(car_id: int):
 
 class MotDocUpdate(BaseModel):
     car_id: int
-    mot_doc: str
+    mot_doc: str | None
 
 @router.post("/car/upload_mot_doc")
 async def upload_mot_doc(data: MotDocUpdate):
