@@ -299,6 +299,7 @@ async def get_rental_agreement(claim_id: str) -> Dict[str, Any]:
         "hire_vehicle_date_in": result.get("hire_vehicle_date_in", ""),
         "hire_vehicle_fuel_out": result.get("hire_vehicle_fuel_out", ""),
         "hire_vehicle_fuel_in": result.get("hire_vehicle_fuel_in", ""),
+        "hire_vehicle_rate_per_day": result.get("hire_vehicle_rate_per_day", ""),
         "change_vehicle_reg": result.get("change_vehicle_reg", ""),
         "change_vehicle_make": result.get("change_vehicle_make", ""),
         "change_vehicle_model": result.get("change_vehicle_model", ""),

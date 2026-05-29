@@ -669,7 +669,7 @@ class ClaimFormQueries:
             "additional_driver_auth",
             "hire_vehicle_reg", "hire_vehicle_make", "hire_vehicle_model", "hire_vehicle_group",
             "hire_vehicle_date_out", "hire_vehicle_date_in",
-            "hire_vehicle_fuel_out", "hire_vehicle_fuel_in",
+            "hire_vehicle_fuel_out", "hire_vehicle_fuel_in", "hire_vehicle_rate_per_day",
             "change_vehicle_reg", "change_vehicle_make", "change_vehicle_model", "change_vehicle_group",
             "change_vehicle_date_out", "change_vehicle_date_in",
             "change_vehicle_fuel_out", "change_vehicle_fuel_in",
