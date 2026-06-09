@@ -3336,3 +3336,93 @@ class ClaimFormQueries:
             print(f"Error updating mot_doc: {e}")
             self.conn.rollback()
             return False
+
+
+
+    def create_blank_offer(self, claim_id: str) -> bool:
+        query = """
+            INSERT INTO offer (claim_id)
+            VALUES (%s)
+            ON CONFLICT (claim_id) DO NOTHING;
+        """
+
+        try:
+            with self.conn.cursor() as cur:
+                cur.execute(query, (claim_id,))
+                self.conn.commit()
+                return cur.rowcount > 0
+        except Exception as e:
+            self.conn.rollback()
+            print(f"Error creating offer: {e}")
+            return False
+
+
+    # =========================
+    # OFFER - GET ALL (JOIN CLAIMS ONLY)
+    # =========================
+    def get_all_offers(self) -> list[dict]:
+        query = """
+            SELECT 
+                o.*,
+                c.claim_type,
+                c.claimant_name
+            FROM offer o
+            LEFT JOIN claims c
+                ON c.claim_id = o.claim_id
+            ORDER BY o.claim_id DESC;
+        """
+
+        with self.conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute(query)
+            return cur.fetchall()
+
+
+    # =========================
+    # OFFER - UPDATE (ANY FIELD)
+    # =========================
+    def update_offer(self, claim_id: str, data: dict) -> bool:
+        if not data:
+            return False
+
+        fields = []
+        values = []
+
+        for key, value in data.items():
+            fields.append(f"{key} = %s")
+            values.append(value)
+
+        values.append(claim_id)
+
+        query = f"""
+            UPDATE offer
+            SET {", ".join(fields)}
+            WHERE claim_id = %s
+        """
+
+        try:
+            with self.conn.cursor() as cur:
+                cur.execute(query, values)
+                self.conn.commit()
+                return cur.rowcount > 0
+        except Exception as e:
+            self.conn.rollback()
+            print(f"Error updating offer: {e}")
+            return False
+
+
+    # =========================
+    # CLAIM SEARCH (FOR DROPDOWN)
+    # =========================
+    def get_claim_search_list(self) -> list[dict]:
+        query = """
+            SELECT 
+                claim_id,
+                claimant_name,
+                claim_type
+            FROM claims
+            ORDER BY claim_id DESC;
+        """
+
+        with self.conn.cursor(cursor_factory=RealDictCursor) as cur:
+            cur.execute(query)
+            return cur.fetchall()

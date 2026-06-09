@@ -2052,3 +2052,91 @@ async def upload_mot_doc(data: MotDocUpdate):
         return {"success": False, "message": "Car not found or update failed"}
 
     return {"success": True, "message": "MOT document link updated"}
+
+
+
+class OfferCreate(BaseModel):
+    claim_id: str
+
+
+@router.post("/offers/create")
+async def create_offer(data: OfferCreate):
+    conn = DBConnection.get_connection()
+    queries = Queries(conn)
+
+    success = queries.create_blank_offer(data.claim_id)
+
+    if not success:
+        return {
+            "success": False,
+            "message": "Offer already exists or failed"
+        }
+
+    return {
+        "success": True,
+        "message": "Blank offer created"
+    }
+
+
+
+@router.get("/offers")
+async def get_offers():
+    conn = DBConnection.get_connection()
+    queries = Queries(conn)
+
+    data = queries.get_all_offers()
+
+    return {
+        "success": True,
+        "data": data
+    }
+
+
+class OfferUpdate(BaseModel):
+    offer1: float | None = None
+    offer1_date: str | None = None
+    offer1_status: str | None = None
+
+    offer2: float | None = None
+    offer2_date: str | None = None
+    offer2_status: str | None = None
+
+    offer3: float | None = None
+    offer3_date: str | None = None
+    offer3_status: str | None = None
+
+    status: str | None = None
+
+
+@router.put("/offers/{claim_id}")
+async def update_offer(claim_id: str, data: OfferUpdate):
+    conn = DBConnection.get_connection()
+    queries = Queries(conn)
+
+    update_data = {k: v for k, v in data.dict().items() if v is not None}
+
+    success = queries.update_offer(claim_id, update_data)
+
+    if not success:
+        return {
+            "success": False,
+            "message": "Offer not found or nothing updated"
+        }
+
+    return {
+        "success": True,
+        "message": "Offer updated"
+    }
+
+
+@router.get("/claims-search")
+async def search_claims():
+    conn = DBConnection.get_connection()
+    queries = Queries(conn)
+
+    data = queries.get_claim_search_list()
+
+    return {
+        "success": True,
+        "data": data
+    }
