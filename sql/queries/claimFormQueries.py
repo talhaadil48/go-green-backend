@@ -1556,11 +1556,12 @@ LEFT JOIN LATERAL (
 -- =====================================
 LEFT JOIN LATERAL (
     SELECT
-        COALESCE(
-            NULLIF(o.offer3, 0),
-            NULLIF(o.offer2, 0),
-            o.offer1
-        ) AS payment_received,
+        CASE
+            WHEN o.offer3_status = 'paid' THEN o.offer3
+            WHEN o.offer2_status = 'paid' THEN o.offer2
+            WHEN o.offer1_status = 'paid' THEN o.offer1
+            ELSE NULL      -- or 0 if you prefer
+        END AS payment_received,
 
         (
             COALESCE(o.offer1_status, '') = 'paid'
@@ -1575,7 +1576,6 @@ LEFT JOIN LATERAL (
             ELSE NULL
         END AS date_received
 ) latest_offer ON TRUE
-
 WHERE c.recently_deleted = FALSE
 
 ORDER BY i.invoice_datetime DESC;
