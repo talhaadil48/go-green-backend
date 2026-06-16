@@ -2140,3 +2140,34 @@ async def search_claims():
         "success": True,
         "data": data
     }
+
+
+
+class OfferCreate(BaseModel):
+    claim_id: str
+    offer1: float
+    offer1_date: str
+    offer1_status: str
+    
+@router.post("/offers")
+async def create_offer(data: OfferCreate):
+    conn = DBConnection.get_connection()
+    queries = Queries(conn)
+
+    success = queries.create_offer(
+        claim_id=data.claim_id,
+        offer1=data.offer1,
+        offer1_date=data.offer1_date,
+        offer1_status=data.offer1_status
+    )
+
+    if not success:
+        return {
+            "success": False,
+            "message": "Offer already exists or failed"
+        }
+
+    return {
+        "success": True,
+        "message": "Offer created"
+    }

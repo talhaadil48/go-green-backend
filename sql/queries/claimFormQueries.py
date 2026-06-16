@@ -3371,7 +3371,7 @@ ORDER BY i.invoice_datetime DESC;
 
     # =========================
     # OFFER - GET ALL (JOIN CLAIMS ONLY)
-    # =========================
+        # =========================
     def get_all_offers(self) -> list[dict]:
         query = """
             SELECT 
@@ -3381,13 +3381,13 @@ ORDER BY i.invoice_datetime DESC;
             FROM offer o
             LEFT JOIN claims c
                 ON c.claim_id = o.claim_id
+            WHERE o.seen = TRUE
             ORDER BY o.claim_id DESC;
         """
 
         with self.conn.cursor(cursor_factory=RealDictCursor) as cur:
             cur.execute(query)
             return cur.fetchall()
-
 
     # =========================
     # OFFER - UPDATE (ANY FIELD)
@@ -3438,3 +3438,44 @@ ORDER BY i.invoice_datetime DESC;
         with self.conn.cursor(cursor_factory=RealDictCursor) as cur:
             cur.execute(query)
             return cur.fetchall()
+        
+
+
+    def create_offer(
+    self,
+    claim_id: str,
+    offer1: float,
+    offer1_date: str,
+    offer1_status: str
+) -> bool:
+        query = """
+            INSERT INTO offer (
+                claim_id,
+                offer1,
+                offer1_date,
+                offer1_status,
+                seen
+            )
+            VALUES (%s, %s, %s, %s, FALSE)
+            ON CONFLICT (claim_id) DO NOTHING;
+        """
+
+        try:
+            with self.conn.cursor() as cur:
+                cur.execute(
+                    query,
+                    (
+                        claim_id,
+                        offer1,
+                        offer1_date,
+                        offer1_status
+                    )
+                )
+
+                self.conn.commit()
+                return cur.rowcount > 0
+
+        except Exception as e:
+            self.conn.rollback()
+            print(f"Error creating offer: {e}")
+            return False
