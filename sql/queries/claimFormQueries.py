@@ -1445,11 +1445,10 @@ class ClaimFormQueries:
 
                 if result is None:
                     return 0
-
-                new_payment_date = result[1]
-
-                if old_payment_date is None and new_payment_date is not None:
-                    self.close_claim(claimId, user, 'Invoice payment recorded')
+                #TODO : right now this feature is removed because client wanted,
+                # new_payment_date = result[1]
+                # if old_payment_date is None and new_payment_date is not None:
+                #     self.close_claim(claimId, user, 'Invoice payment recorded')
 
                 self.conn.commit()
                 return result[0]
