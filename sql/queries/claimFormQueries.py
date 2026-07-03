@@ -1352,7 +1352,7 @@ class ClaimFormQueries:
                 invoice_id = cur.fetchone()[0]
 
                 # 4. Handle "Invoice Sent" logic and Claim Change logging
-                if docs and 'Rental Agreement' in docs:
+                if docs and 'Hire Agreement' in docs:
                     self.update_claim_status(claim_id, "invoice sent")
                     
                     # If the invoice was already there (meaning it's an update), log the claim change
