@@ -734,6 +734,37 @@ async def update_invoice(
         "invoice_id": updated_id
     }
 
+
+
+
+
+
+class InvoiceDatetimeUpdate(BaseModel):
+    invoice_datetime: datetime
+
+
+@router.put("/invoice/{invoice_id}/datetime")
+async def update_invoice_datetime(
+    invoice_id: int,
+    data: InvoiceDatetimeUpdate,
+    current_user: CurrentUser = Depends(get_current_user)
+):
+    conn = DBConnection.get_connection()
+    queries = Queries(conn)
+
+    updated = queries.update_invoice_datetime(
+        invoice_id,
+        data.invoice_datetime
+    )
+
+    if updated == 0:
+        return {"success": False, "message": "Invoice not found"}
+
+    return {"success": True, "invoice_id": updated}
+
+
+
+
 @router.get("/invoice")
 async def get_all_invoices():
     conn = DBConnection.get_connection()

@@ -1456,6 +1456,34 @@ class ClaimFormQueries:
         except Exception as e:
             print(f"Error updating invoice: {e}")
             self.conn.rollback()
+            return 0    
+        
+
+    def update_invoice_datetime(self, invoice_id: int, invoice_datetime):
+        try:
+            with self.conn.cursor() as cur:
+                cur.execute(
+                    """
+                    UPDATE invoice
+                    SET invoice_datetime = %s
+                    WHERE id = %s
+                    RETURNING id;
+                    """,
+                    (invoice_datetime, invoice_id)
+                )
+
+                result = cur.fetchone()
+
+                if result is None:
+                    self.conn.rollback()
+                    return 0
+
+                self.conn.commit()
+                return result[0]
+
+        except Exception as e:
+            print(f"Error updating invoice datetime: {e}")
+            self.conn.rollback()
             return 0
 
 
