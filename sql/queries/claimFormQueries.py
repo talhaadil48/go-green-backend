@@ -1193,13 +1193,113 @@ class ClaimFormQueries:
 
         
     def get_claim_by_id(self, claim_id: str) -> dict | None:
-        query = "SELECT * FROM claims WHERE claim_id = %s;"
+        query = """
+        SELECT
+            c.*,
+
+            -- latest invoice
+            i.id AS invoice_id,
+            i.invoice_datetime,
+            i.info,
+
+            -- hire_end_date
+            CASE
+                WHEN ra.hire_vehicle_date_in IS NULL THEN NULL
+                WHEN EXISTS (
+                    SELECT 1
+                    FROM jsonb_array_elements(ra.change_vehicle_history::jsonb) AS j
+                    WHERE j->>'date_in' = ''
+                ) THEN NULL
+                ELSE GREATEST(
+                    ra.hire_vehicle_date_in,
+                    (
+                        SELECT MAX((NULLIF(j->>'date_in',''))::date)
+                        FROM jsonb_array_elements(ra.change_vehicle_history::jsonb) AS j
+                        WHERE NULLIF(j->>'date_in','') IS NOT NULL
+                    )
+                )
+            END AS hire_end_date,
+
+            -- hire_start_date
+            LEAST(
+                ra.hire_vehicle_date_out,
+                (
+                    SELECT MIN((NULLIF(j->>'date_out',''))::date)
+                    FROM jsonb_array_elements(ra.change_vehicle_history::jsonb) AS j
+                    WHERE NULLIF(j->>'date_out','') IS NOT NULL
+                )
+            ) AS hire_start_date,
+
+            -- latest vehicle reg
+            (
+                SELECT vehicle_reg
+                FROM (
+                    SELECT 
+                        ra.hire_vehicle_reg AS vehicle_reg,
+                        ra.hire_vehicle_date_out AS date_out
+                    WHERE NULLIF(ra.hire_vehicle_reg, '') IS NOT NULL
+                    AND ra.hire_vehicle_date_out IS NOT NULL
+
+                    UNION ALL
+
+                    SELECT
+                        j->>'vehicle_reg' AS vehicle_reg,
+                        (NULLIF(j->>'date_out',''))::date AS date_out
+                    FROM jsonb_array_elements(ra.change_vehicle_history::jsonb) AS j
+                    WHERE NULLIF(j->>'date_out','') IS NOT NULL
+                    AND NULLIF(j->>'vehicle_reg','') IS NOT NULL
+
+                ) AS all_vehicles
+                ORDER BY date_out DESC
+                LIMIT 1
+            ) AS latest_vehicle_reg
+
+        FROM claims c
+
+        LEFT JOIN (
+            SELECT DISTINCT ON (claim_id)
+                id,
+                claim_id,
+                invoice_datetime,
+                info
+            FROM invoice
+            ORDER BY claim_id, invoice_datetime DESC
+        ) i
+        ON c.claim_id = i.claim_id
+
+        LEFT JOIN rental_agreements ra
+        ON c.claim_id = ra.claim_id
+
+        WHERE c.claim_id = %s
+        AND c.recently_deleted = FALSE;
+        """
+
         with self.conn.cursor() as cur:
             cur.execute(query, (claim_id,))
             row = cur.fetchone()
+
             if row:
                 columns = [desc[0] for desc in cur.description]
-                return dict(zip(columns, row))
+                claim = dict(zip(columns, row))
+
+              
+                if claim.get("invoice_date"):
+                    claim["status"] = "invoice sent"
+
+                elif claim.get("hire_end_date"):
+                    claim["status"] = "hire end"
+
+                elif claim.get("pay_date"):
+                    claim["status"] = "client paid"
+
+                elif claim.get("hire_start_date"):
+                    claim["status"] = "hire start"
+
+                else:
+                    claim["status"] = "claim created"
+
+                return claim
+
         return None
 
     def get_claim_documents(self, claim_id: str) -> dict | None:
