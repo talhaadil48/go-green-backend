@@ -1402,14 +1402,14 @@ class ClaimFormQueries:
             return 0
         
     def insert_invoice(
-        self,
-        claim_id: str,
-        info: str = None,
-        docs: list = None,
-        storage_bill: float = None,
-        rent_bill: float = None,
-        user_name: str = None
-    ) -> int:
+    self,
+    claim_id: str,
+    info: str = None,
+    docs: list = None,
+    storage_bill: float = None,
+    rent_bill: float = None,
+    user_name: str = None
+) -> int:
 
         # 1. Prepare data
         fields = {
@@ -1419,7 +1419,7 @@ class ClaimFormQueries:
             "storage_bill": storage_bill,
             "rent_bill": rent_bill,
             "user_name": user_name,
-            "invoice_datetime": datetime.now()   # ALWAYS include
+            "invoice_datetime": datetime.now()  # ALWAYS include
         }
 
         insert_fields = {k: v for k, v in fields.items() if v is not None}
@@ -1443,27 +1443,36 @@ class ClaimFormQueries:
 
         try:
             with self.conn.cursor() as cur:
-                # 2. Check if the invoice already exists for this claim_id
-                cur.execute("SELECT id FROM invoice WHERE claim_id = %s;", (claim_id,))
-                invoice_exists = cur.fetchone() is not None
+                # Check if the invoice already exists
+                cur.execute(
+                    "SELECT id FROM invoice WHERE claim_id = %s;",
+                    (claim_id,)
+                )
+                existing_invoice = cur.fetchone()
+                invoice_exists = existing_invoice is not None
 
-                # 3. Execute the Insert/Update
+                # If invoice already exists and Hire Agreement is not present,
+                # do NOT update anything.
+                if invoice_exists and (not docs or "Hire Agreement" not in docs):
+                    print(f"Invoice already exists for claim_id {claim_id} and no Hire Agreement present. Skipping update.")
+                    return existing_invoice[0]
+
+                # Insert or Update
                 cur.execute(upsert_query, tuple(insert_fields.values()))
                 invoice_id = cur.fetchone()[0]
 
-                # 4. Handle "Invoice Sent" logic and Claim Change logging
-                if docs and 'Hire Agreement' in docs:
+                # If Hire Agreement is present, update claim status
+                if docs and "Hire Agreement" in docs:
                     self.update_claim_status(claim_id, "invoice sent")
-                    
-                    # If the invoice was already there (meaning it's an update), log the claim change
+
+                # Log claim change only for updates
                 if invoice_exists:
-                        # Assuming you have a method named `insert_claim_change`
                     self.insert_claim_change(
                         claim_id=claim_id,
                         user_name=user_name,
                         date=datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
                         form="Invoice Sent",
-                        fields=docs  # You can customize this to include specific fields that changed if needed
+                        fields=docs
                     )
 
                 self.conn.commit()
@@ -1474,6 +1483,8 @@ class ClaimFormQueries:
             self.conn.rollback()
             return 0
     
+
+
     def update_invoice(
     self,
     invoice_id: int,
@@ -1775,17 +1786,18 @@ ORDER BY i.invoice_datetime DESC;
             raise e
 
 
-
     def update_car(
-    self,
-    car_id,
-    model,
-    name,
-    service_time,
-    attributes=None,
-    mot_date=None,
-    current_miles=None
-) -> bool:
+        self,
+        car_id,
+        model,
+        name,
+        service_time,
+        attributes=None,
+        mot_date=None,
+        current_miles=None,
+        ownership=None,
+        ownership_amount=None,
+    ) -> bool:
         try:
             query = """
                 UPDATE cars
@@ -1795,7 +1807,9 @@ ORDER BY i.invoice_datetime DESC;
                     service_time = COALESCE(%s, service_time),
                     attributes = COALESCE(%s, attributes),
                     mot_date = COALESCE(%s, mot_date),
-                    current_miles = COALESCE(%s, current_miles)
+                    current_miles = COALESCE(%s, current_miles),
+                    ownership = COALESCE(%s, ownership),
+                    ownership_amount = COALESCE(%s, ownership_amount)
                 WHERE id = %s
             """
 
@@ -1809,12 +1823,16 @@ ORDER BY i.invoice_datetime DESC;
                         attributes,
                         mot_date,
                         current_miles,
-                        car_id
+                        ownership,
+                        ownership_amount,
+                        car_id,
                     )
                 )
 
+                updated = cur.rowcount
+
             self.conn.commit()
-            return True
+            return updated > 0
 
         except psycopg2.errors.UniqueViolation:
             self.conn.rollback()

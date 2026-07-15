@@ -862,6 +862,8 @@ class CarUpdate(BaseModel):
     attributes: Optional[List[str]] = None
     mot_date: Optional[str] = None
     current_miles: Optional[int] = None
+    ownership: Optional[str] = None
+    ownership_amount: Optional[float] = None
 
 @router.put("/car/{car_id}")
 async def update_car(car_id: int, payload: CarUpdate):
@@ -870,14 +872,16 @@ async def update_car(car_id: int, payload: CarUpdate):
 
     try:
         updated = queries.update_car(
-            car_id,
-            payload.model,
-            payload.name,
-            payload.service_time,
-            payload.attributes,
-            payload.mot_date,
-            payload.current_miles
-        )
+                car_id,
+                payload.model,
+                payload.name,
+                payload.service_time,
+                payload.attributes,
+                payload.mot_date,
+                payload.current_miles,
+                payload.ownership,
+                payload.ownership_amount,
+            )
     except Exception as e:
         conn.rollback()
         raise HTTPException(status_code=400, detail=str(e))
