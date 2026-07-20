@@ -1411,36 +1411,6 @@ class ClaimFormQueries:
     user_name: str = None
 ) -> int:
 
-        # 1. Prepare data
-        fields = {
-            "claim_id": claim_id,
-            "info": info,
-            "docs": docs,
-            "storage_bill": storage_bill,
-            "rent_bill": rent_bill,
-            "user_name": user_name,
-            "invoice_datetime": datetime.now()  # ALWAYS include
-        }
-
-        insert_fields = {k: v for k, v in fields.items() if v is not None}
-        columns = ", ".join(insert_fields.keys())
-        placeholders = ", ".join(["%s"] * len(insert_fields))
-
-        update_fields = [
-            f"{k} = EXCLUDED.{k}"
-            for k in insert_fields.keys()
-            if k != "claim_id"
-        ]
-        update_clause = ", ".join(update_fields)
-
-        upsert_query = f"""
-            INSERT INTO invoice ({columns})
-            VALUES ({placeholders})
-            ON CONFLICT (claim_id)
-            DO UPDATE SET {update_clause}
-            RETURNING id;
-        """
-
         try:
             with self.conn.cursor() as cur:
                 # Check if the invoice already exists
@@ -1449,17 +1419,65 @@ class ClaimFormQueries:
                     (claim_id,)
                 )
                 existing_invoice = cur.fetchone()
+                print(existing_invoice)
                 invoice_exists = existing_invoice is not None
-
+                
                 # If invoice already exists and Hire Agreement is not present,
                 # do NOT update anything.
                 if invoice_exists and (not docs or "Hire Agreement" not in docs):
                     print(f"Invoice already exists for claim_id {claim_id} and no Hire Agreement present. Skipping update.")
                     return existing_invoice[0]
 
-                # Insert or Update
+                # 1. Prepare data
+                fields = {
+                    "claim_id": claim_id,
+                    "info": info,
+                    "docs": docs,
+                    "storage_bill": storage_bill,
+                    "rent_bill": rent_bill,
+                    "user_name": user_name,
+                    # New invoice -> no datetime yet; existing invoice -> stamp now
+                    "invoice_datetime": datetime.now() if invoice_exists else None
+                }
+
+                insert_fields = {k: v for k, v in fields.items() if v is not None}
+                columns = ", ".join(insert_fields.keys())
+                placeholders = ", ".join(["%s"] * len(insert_fields))
+
+                update_fields = [
+                    f"{k} = EXCLUDED.{k}"
+                    for k in insert_fields.keys()
+                    if k != "claim_id"
+                ]
+
+                if update_fields:
+                    update_clause = ", ".join(update_fields)
+                    conflict_clause = f"DO UPDATE SET {update_clause}"
+                else:
+                    # Nothing besides claim_id to update on conflict
+                    conflict_clause = "DO NOTHING"
+
+                upsert_query = f"""
+                    INSERT INTO invoice ({columns})
+                    VALUES ({placeholders})
+                    ON CONFLICT (claim_id)
+                    {conflict_clause}
+                    RETURNING id;
+                """
+
                 cur.execute(upsert_query, tuple(insert_fields.values()))
-                invoice_id = cur.fetchone()[0]
+                row = cur.fetchone()
+
+                if row is None:
+                    # Conflict occurred and DO NOTHING fired (no row returned) —
+                    # fetch the existing id instead.
+                    cur.execute(
+                        "SELECT id FROM invoice WHERE claim_id = %s;",
+                        (claim_id,)
+                    )
+                    row = cur.fetchone()
+
+                invoice_id = row[0]
 
                 # If Hire Agreement is present, update claim status
                 if docs and "Hire Agreement" in docs:
@@ -1482,8 +1500,6 @@ class ClaimFormQueries:
             print(f"Error inserting/updating invoice: {e}")
             self.conn.rollback()
             return 0
-    
-
 
     def update_invoice(
     self,
