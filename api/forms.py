@@ -393,7 +393,6 @@ async def delete_claim(claim_id: str):
 async def get_all_claims() -> list[Dict[str, Any]]:
     conn = DBConnection.get_connection()
     queries = Queries(conn)
-
     return queries.get_all_claims()
 
 @router.get("/claims/{claim_id}")

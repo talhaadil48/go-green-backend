@@ -1283,7 +1283,7 @@ class ClaimFormQueries:
                 claim = dict(zip(columns, row))
 
               
-                if claim.get("invoice_date"):
+                if claim.get("invoice_datetime"):
                     claim["status"] = "invoice sent"
 
                 elif claim.get("hire_end_date"):
