@@ -528,35 +528,98 @@ class ClaimFormQueries:
 
                 return result
 
-        def handle_fleet_history(reg, old_out, old_in, new_out, new_in, miles_out_val, miles_in_val):
+        def handle_fleet_history(
+            reg,
+            old_out,
+            old_in,
+            new_out,
+            new_in,
+            miles_out_val,
+            miles_in_val,
+        ):
+            print("\n" + "=" * 80)
+            print("handle_fleet_history()")
+            print("=" * 80)
+            print(f"reg            : {reg}")
+            print(f"claim_id       : {claim_id}")
+            print(f"old_out        : {old_out}")
+            print(f"old_in         : {old_in}")
+            print(f"new_out        : {new_out}")
+            print(f"new_in         : {new_in}")
+            print(f"miles_out_val  : {miles_out_val}")
+            print(f"miles_in_val   : {miles_in_val}")
+
             # invalid case
             if new_in and not new_out:
+                print("EXIT -> Invalid state: hire_end exists but hire_start is missing")
                 return
 
-            # prevent changing date_out
-            if old_out and new_out and old_out != new_out:
-                print("CASE")
-                return
-            
-            # CASE 1: both null → insert
+            # CASE 1
             if not old_out and not old_in:
+                print("CASE 1 -> No existing fleet history")
+
                 if new_out and not new_in:
-                    self.insert_fleet_history(new_out, None, claim_id, reg, miles_in_val, miles_out_val)
+                    print("ACTION -> insert_fleet_history (open hire)")
+                    self.insert_fleet_history(
+                        new_out,
+                        None,
+                        claim_id,
+                        reg,
+                        miles_in_val,
+                        miles_out_val,
+                    )
+
                 elif new_out and new_in:
-                    self.insert_fleet_history(new_out, new_in, claim_id, reg, miles_in_val, miles_out_val)
+                    print("ACTION -> insert_fleet_history (closed hire)")
+                    self.insert_fleet_history(
+                        new_out,
+                        new_in,
+                        claim_id,
+                        reg,
+                        miles_in_val,
+                        miles_out_val,
+                    )
 
-            # CASE 2: out exists, in null → update
+                else:
+                    print("Nothing to insert")
+
+            # CASE 2
             elif old_out and not old_in:
-                if new_out and new_in:
-                    self.update_fleet_history_hire_end(new_in, claim_id, reg, old_out, miles_in_val, miles_out_val)
+                print("CASE 2 -> Existing open hire")
 
-            # CASE 3: both exist → do nothing
+                if new_out and new_in:
+                    print("ACTION -> update_fleet_history")
+                    self.update_fleet_history(
+                        old_hire_start=old_out,
+                        new_hire_start=new_out,
+                        hire_end=new_in,
+                        claim_id=claim_id,
+                        car_reg=reg,
+                        miles_in=miles_in_val,
+                        miles_out=miles_out_val,
+                    )
+                else:
+                    print("No update required")
+
+            # CASE 3
             elif old_out and old_in:
-                print("CASE 3")
-                print(f"old_out: {old_out}, old_in: {old_in}, new_out: {new_out}, new_in: {new_in}")
-                print("miles_in_val", miles_in_val, "miles_out_val", miles_out_val)
-                print("reg", reg)
-                self.update_fleet_history_hire_end(old_in, claim_id, reg, old_out, miles_in_val, miles_out_val)
+                print("CASE 3 -> Existing completed hire")
+
+                self.update_fleet_history(
+                    old_hire_start=old_out,
+                    new_hire_start=new_out,
+                    hire_end=new_in,
+                    claim_id=claim_id,
+                    car_reg=reg,
+                    miles_in=miles_in_val,
+                    miles_out=miles_out_val,
+                )
+
+            else:
+                print("Reached unexpected state")
+
+            print("handle_fleet_history() COMPLETE")
+            print("=" * 80)
 
         def recalculate_car_availability(reg_no: str):
             if not reg_no:
@@ -619,6 +682,7 @@ class ClaimFormQueries:
             new_regs.add(hire_reg)
 
         change_history = data.get("change_vehicle_history", [])
+
         if isinstance(change_history, str):
             try:
                 change_history = json.loads(change_history)
@@ -626,6 +690,31 @@ class ClaimFormQueries:
             except Exception as e:
                 print(f"[ERROR] Failed to parse incoming change_vehicle_history: {e}")
                 change_history = []
+
+
+        # ==========================================
+        # ADD IDS TO CHANGE VEHICLE HISTORY
+        # ==========================================
+
+        existing_history = existing.get("change_vehicle_history", []) or []
+
+        existing_ids = [
+            item.get("id")
+            for item in existing_history
+            if item.get("id") is not None
+        ]
+
+        next_id = max(existing_ids, default=0) + 1
+
+
+        for item in change_history:
+            if not item.get("id"):
+                item["id"] = next_id
+                next_id += 1
+
+
+        print("[DEBUG] change_vehicle_history after ID assignment")
+        print(change_history)
 
         for ch in change_history:
             reg = ch.get("vehicle_reg")
@@ -812,25 +901,51 @@ class ClaimFormQueries:
                 new_history = new_history or []
 
                 old_map = {
-                    (c.get("vehicle_reg"), c.get("date_out")): c
+                    c.get("id"): c
                     for c in old_history
+                    if c.get("id")
                 }
 
                 for change in new_history:
+
+                    change_id = change.get("id")
                     change_reg = change.get("vehicle_reg")
-                    change_new_out = change.get("date_out")
-                    change_new_in = change.get("date_in")
 
                     if not change_reg:
                         continue
 
-                    old = old_map.get((change_reg, change_new_out), {})
+
+                    # Find old history using ID
+                    old = old_map.get(change_id, {})
+
+
                     change_old_out = old.get("date_out")
                     change_old_in = old.get("date_in")
+
+                    change_new_out = change.get("date_out")
+                    change_new_in = change.get("date_in")
+
                     miles_in = change.get("miles_in")
                     miles_out = change.get("miles_out")
 
-                    handle_fleet_history(change_reg, change_old_out, change_old_in, change_new_out, change_new_in, miles_out, miles_in)
+
+                    print("\nCHANGE VEHICLE MATCH")
+                    print(f"id        : {change_id}")
+                    print(f"old_out   : {change_old_out}")
+                    print(f"old_in    : {change_old_in}")
+                    print(f"new_out   : {change_new_out}")
+                    print(f"new_in    : {change_new_in}")
+
+
+                    handle_fleet_history(
+                        change_reg,
+                        change_old_out,
+                        change_old_in,
+                        change_new_out,
+                        change_new_in,
+                        miles_out,
+                        miles_in
+                    )
 
 
                 # ---------------------------
@@ -894,7 +1009,6 @@ class ClaimFormQueries:
             print(f"Error in upsert_rental_agreement: {e}")
             self.conn.rollback()
             return None
-
 
 
     def check_is_available(self, vehicle_reg: str):
@@ -2957,36 +3071,106 @@ ORDER BY i.invoice_datetime DESC;
         self.conn.commit()
 
 
-    def update_fleet_history_hire_end(
-        self,
-        hire_end: str,
-        claim_id: str,
-        car_reg: str,
-        hire_start: str,
-        miles_in: str,
-        miles_out: str
+    def update_fleet_history(
+    self,
+    old_hire_start: str,
+    new_hire_start: str,
+    hire_end: str,
+    claim_id: str,
+    car_reg: str,
+    miles_in: str,
+    miles_out: str,
     ):
-        
-        if miles_in == '':
+
+        print("\n" + "-" * 80)
+        print("update_fleet_history()")
+        print("-" * 80)
+
+        print("RAW INPUT")
+        print(f"old_hire_start : {old_hire_start}")
+        print(f"new_hire_start : {new_hire_start}")
+        print(f"hire_end       : {hire_end}")
+        print(f"claim_id       : {claim_id}")
+        print(f"car_reg        : {car_reg}")
+        print(f"miles_in       : {miles_in}")
+        print(f"miles_out      : {miles_out}")
+
+        if miles_in == "":
             miles_in = None
-        if miles_out == '':
+
+        if miles_out == "":
             miles_out = None
+
+        print("\nNORMALIZED VALUES")
+        print(f"miles_in  : {miles_in}")
+        print(f"miles_out : {miles_out}")
+
         query = """
             UPDATE fleet_history
-            SET hire_end = %s,
+            SET
+                hire_start = %s,
+                hire_end = %s,
                 miles_in = %s,
                 miles_out = %s
             WHERE claim_id = %s
             AND car_reg = %s
             AND hire_start = %s;
         """
+
+        params = (
+            new_hire_start,
+            hire_end,
+            miles_in,
+            miles_out,
+            claim_id,
+            car_reg,
+            old_hire_start,
+        )
+
+        print("\nSQL PARAMETERS")
+        print(params)
+
         with self.conn.cursor() as cur:
-            cur.execute(query, (hire_end, miles_in, miles_out, claim_id, car_reg, hire_start))
+
+            print("Executing UPDATE...")
+
+            cur.execute(query, params)
+
+            print(f"Rows affected: {cur.rowcount}")
+
+            if cur.rowcount != 1:
+                print("UPDATE FAILED")
+                print(f"claim_id       : {claim_id}")
+                print(f"car_reg        : {car_reg}")
+                print(f"old_hire_start : {old_hire_start}")
+
+                cur.execute(
+                    """
+                    SELECT *
+                    FROM fleet_history
+                    WHERE claim_id=%s
+                    """,
+                    (claim_id,),
+                )
+
+                rows = cur.fetchall()
+
+                print("\nExisting rows for claim:")
+                for row in rows:
+                    print(row)
+
+                raise ValueError(
+                    f"Fleet history record not found for "
+                    f"claim_id={claim_id}, "
+                    f"car_reg={car_reg}, "
+                    f"hire_start={old_hire_start}"
+                )
+
         self.conn.commit()
 
-
-    
-
+        print("Commit successful")
+        print("update_fleet_history() COMPLETE")
+        print("-" * 80)
 
     def get_all_fleet_history(self) -> list[dict]:
         query = """
