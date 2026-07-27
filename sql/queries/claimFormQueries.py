@@ -587,8 +587,10 @@ class ClaimFormQueries:
             elif old_out and not old_in:
                 print("CASE 2 -> Existing open hire")
 
-                if new_out and new_in:
+                # Update if hire start changed OR hire end is now provided
+                if new_out and (new_out != old_out or new_in):
                     print("ACTION -> update_fleet_history")
+
                     self.update_fleet_history(
                         old_hire_start=old_out,
                         new_hire_start=new_out,
@@ -598,9 +600,9 @@ class ClaimFormQueries:
                         miles_in=miles_in_val,
                         miles_out=miles_out_val,
                     )
+
                 else:
                     print("No update required")
-
             # CASE 3
             elif old_out and old_in:
                 print("CASE 3 -> Existing completed hire")
