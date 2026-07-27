@@ -3080,7 +3080,7 @@ ORDER BY i.invoice_datetime DESC;
     car_reg: str,
     miles_in: str,
     miles_out: str,
-    ):
+):
 
         print("\n" + "-" * 80)
         print("update_fleet_history()")
@@ -3095,6 +3095,7 @@ ORDER BY i.invoice_datetime DESC;
         print(f"miles_in       : {miles_in}")
         print(f"miles_out      : {miles_out}")
 
+        # Normalize empty miles
         if miles_in == "":
             miles_in = None
 
@@ -3105,7 +3106,7 @@ ORDER BY i.invoice_datetime DESC;
         print(f"miles_in  : {miles_in}")
         print(f"miles_out : {miles_out}")
 
-        query = """
+        update_query = """
             UPDATE fleet_history
             SET
                 hire_start = %s,
@@ -3117,7 +3118,7 @@ ORDER BY i.invoice_datetime DESC;
             AND hire_start = %s;
         """
 
-        params = (
+        update_params = (
             new_hire_start,
             hire_end,
             miles_in,
@@ -3127,40 +3128,58 @@ ORDER BY i.invoice_datetime DESC;
             old_hire_start,
         )
 
-        print("\nSQL PARAMETERS")
-        print(params)
+        print("\nUPDATE PARAMETERS")
+        print(update_params)
 
         with self.conn.cursor() as cur:
 
             print("Executing UPDATE...")
 
-            cur.execute(query, params)
+            cur.execute(update_query, update_params)
 
             print(f"Rows affected: {cur.rowcount}")
 
-            if cur.rowcount != 1:
-                print("UPDATE FAILED")
-                print(f"claim_id       : {claim_id}")
-                print(f"car_reg        : {car_reg}")
-                print(f"old_hire_start : {old_hire_start}")
+            # If no existing row found, create new one
+            if cur.rowcount == 0:
 
-                cur.execute(
-                    """
-                    SELECT *
-                    FROM fleet_history
-                    WHERE claim_id=%s
-                    """,
-                    (claim_id,),
+                print("No existing fleet history found")
+                print("Creating new fleet history entry...")
+
+                insert_query = """
+                    INSERT INTO fleet_history
+                    (
+                        hire_start,
+                        hire_end,
+                        claim_id,
+                        car_reg,
+                        miles_in,
+                        miles_out
+                    )
+                    VALUES (%s, %s, %s, %s, %s, %s);
+                """
+
+                insert_params = (
+                    new_hire_start,
+                    hire_end,
+                    claim_id,
+                    car_reg,
+                    miles_in,
+                    miles_out,
                 )
 
-                rows = cur.fetchall()
+                print("\nINSERT PARAMETERS")
+                print(insert_params)
 
-                print("\nExisting rows for claim:")
-                for row in rows:
-                    print(row)
+                cur.execute(insert_query, insert_params)
+
+                print("INSERT SUCCESSFUL")
+
+            elif cur.rowcount > 1:
+
+                print("ERROR: Multiple fleet history records updated")
 
                 raise ValueError(
-                    f"Fleet history record not found for "
+                    f"Multiple fleet history records found for "
                     f"claim_id={claim_id}, "
                     f"car_reg={car_reg}, "
                     f"hire_start={old_hire_start}"
@@ -3168,10 +3187,9 @@ ORDER BY i.invoice_datetime DESC;
 
         self.conn.commit()
 
-        print("Commit successful")
+        print("\nCommit successful")
         print("update_fleet_history() COMPLETE")
         print("-" * 80)
-
     def get_all_fleet_history(self) -> list[dict]:
         query = """
             SELECT *
