@@ -1072,7 +1072,7 @@ class ClaimFormQueries:
                     AND ch->>'date_out' IS NOT NULL
                     AND (ch->>'date_in' = '' OR ch->>'date_in' IS NULL)
                 )
-                ORDER BY r.rental_agreement_id DESC
+                ORDER BY r.rental_agreement_id ASC
                 LIMIT 1
             ) ra ON TRUE
             WHERE c.reg_no = %s;
@@ -1094,7 +1094,6 @@ class ClaimFormQueries:
                 "is_available": is_available,
                 "claim_id": claim_id
             }
-
     def upsert_claim_documents(self, claim_id: str, documents: dict) -> None:
         query = """
         INSERT INTO claim_documents (claim_id, documents)
@@ -1430,7 +1429,7 @@ class ClaimFormQueries:
             i.invoice_datetime,
             i.info,
 
-            -- hire_end_date
+            -- hire_end_date (from the smallest rental_agreement_id)
             CASE
                 WHEN ra.hire_vehicle_date_in IS NULL THEN NULL
                 WHEN EXISTS (
@@ -1448,7 +1447,7 @@ class ClaimFormQueries:
                 )
             END AS hire_end_date,
 
-            -- hire_start_date
+            -- hire_start_date (from the smallest rental_agreement_id)
             LEAST(
                 ra.hire_vehicle_date_out,
                 (
@@ -1458,7 +1457,7 @@ class ClaimFormQueries:
                 )
             ) AS hire_start_date,
 
-            -- latest vehicle reg
+            -- latest vehicle reg (from the smallest rental_agreement_id)
             (
                 SELECT vehicle_reg
                 FROM (
@@ -1495,8 +1494,13 @@ class ClaimFormQueries:
         ) i
         ON c.claim_id = i.claim_id
 
-        LEFT JOIN rental_agreements ra
-        ON c.claim_id = ra.claim_id
+        LEFT JOIN LATERAL (
+            SELECT *
+            FROM rental_agreements ra
+            WHERE ra.claim_id = c.claim_id
+            ORDER BY ra.rental_agreement_id ASC
+            LIMIT 1
+        ) ra ON TRUE
 
         WHERE c.claim_id = %s
         AND c.recently_deleted = FALSE;
@@ -1510,7 +1514,7 @@ class ClaimFormQueries:
                 columns = [desc[0] for desc in cur.description]
                 claim = dict(zip(columns, row))
 
-              
+            
                 if claim.get("invoice_datetime"):
                     claim["status"] = "invoice sent"
 
@@ -1529,7 +1533,6 @@ class ClaimFormQueries:
                 return claim
 
         return None
-
     def get_claim_documents(self, claim_id: str) -> dict | None:
         query = "SELECT * FROM claim_documents WHERE claim_id = %s;"
         with self.conn.cursor() as cur:
@@ -1884,8 +1887,13 @@ class ClaimFormQueries:
             LEFT JOIN claims c
                 ON c.claim_id = i.claim_id
 
-            LEFT JOIN rental_agreements ra
-                ON ra.claim_id = i.claim_id
+            LEFT JOIN LATERAL (
+                SELECT *
+                FROM rental_agreements ra
+                WHERE ra.claim_id = i.claim_id
+                ORDER BY ra.rental_agreement_id ASC
+                LIMIT 1
+            ) ra ON TRUE
 
             LEFT JOIN offer o
                 ON o.claim_id = i.claim_id
@@ -1968,7 +1976,6 @@ class ClaimFormQueries:
         except Exception as e:
             print(f"Error fetching all invoices: {e}")
             return []
-
     def get_invoices_by_claim_id(self, claim_id: str):
         query = """
             SELECT id, claim_id, invoice_datetime, info,
@@ -2110,7 +2117,7 @@ class ClaimFormQueries:
                     
                 FROM cars c
 
-                -- NORMAL HIRE: Get the current holder from rental_agreements
+                -- NORMAL HIRE: Get the current holder from rental_agreements (smallest ID first)
                 LEFT JOIN LATERAL (
                     SELECT r.claim_id
                     FROM rental_agreements r
@@ -2126,7 +2133,7 @@ class ClaimFormQueries:
                         AND ch->>'date_out' IS NOT NULL
                         AND (ch->>'date_in' = '' OR ch->>'date_in' IS NULL)
                     )
-                    ORDER BY r.rental_agreement_id DESC
+                    ORDER BY r.rental_agreement_id ASC
                     LIMIT 1
                 ) ra ON c.is_long_hire = false
 
@@ -2178,8 +2185,7 @@ class ClaimFormQueries:
             car.pop("long_claim_miles", None)
             car.pop("miles_list", None)
 
-        return cars    
-
+        return cars
     def get_free_cars(self):
         query = "SELECT * FROM cars WHERE is_long_hire = FALSE ORDER BY id ASC"
         with self.conn.cursor(cursor_factory=RealDictCursor) as cur:
@@ -3066,7 +3072,7 @@ class ClaimFormQueries:
                 columns = [desc[0] for desc in cur.description]
                 summary["accident_claim"] = dict(zip(columns, row))
 
-            # 3. Rental Agreement (expanded fields)
+            # 3. Rental Agreement (get the one with smallest rental_agreement_id)
             cur.execute("""
                 SELECT 
                     hire_vehicle_reg,
@@ -3077,11 +3083,10 @@ class ClaimFormQueries:
                     hire_vehicle_miles_out,
                     hire_vehicle_miles_in,
                     change_vehicle_history
-                        
-
-
                 FROM rental_agreements 
-                WHERE claim_id = %s;
+                WHERE claim_id = %s
+                ORDER BY rental_agreement_id ASC
+                LIMIT 1;
             """, (claim_id,))
             row = cur.fetchone()
             if row:
@@ -3110,8 +3115,7 @@ class ClaimFormQueries:
                 columns = [desc[0] for desc in cur.description]
                 summary["invoices"] = [dict(zip(columns, row)) for row in rows]
 
-        return summary  
-    
+        return summary
     def get_claim_lock(self, claim_id: str):
         query = """
             SELECT claim_id, locked_by, lock_expires_at
@@ -3427,12 +3431,12 @@ class ClaimFormQueries:
         updated_fields_log = []  # List to track the exact field names being updated for the history log
         params = {"claim_id": claim_id}
 
-        if "date_in" in locals():
+        if date_in is not None:
             fields.append("hire_vehicle_date_in = %(date_in)s")
-            params["date_in"] = date_in  # None will become NULL in Postgres
+            params["date_in"] = date_in
             updated_fields_log.append("hire_vehicle_date_in")
 
-        if "date_out" in locals():
+        if date_out is not None:
             fields.append("hire_vehicle_date_out = %(date_out)s")
             params["date_out"] = date_out
             updated_fields_log.append("hire_vehicle_date_out")
@@ -3444,41 +3448,88 @@ class ClaimFormQueries:
         params.setdefault("date_in", None)
         params.setdefault("date_out", None)
 
-        query = f"""
-            INSERT INTO rental_agreements (claim_id, hire_vehicle_date_in, hire_vehicle_date_out)
-            VALUES (%(claim_id)s, %(date_in)s, %(date_out)s)
-            ON CONFLICT (claim_id)
-            DO UPDATE SET
-                {', '.join(fields)}
-            RETURNING *;
-        """
-
-        try:
-            with self.conn.cursor() as cur:
-                cur.execute(query, params)
-                row = cur.fetchone()
-                if row:
-                    self.conn.commit()
-                    self.refresh_rental_agreements_view()
-                    
-                    # Log the changes
-                    if updated_by:
-                        current_date = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-                        self.insert_claim_change(
-                            claim_id=claim_id,
-                            user_name=updated_by,
-                            date=current_date,
-                            form="Claim Dashboard",
-                            fields=["Hire Vehicle Dates"]  # General field name for the dashboard log
-                        )
-                    
-                    columns = [desc[0] for desc in cur.description]
-                    return dict(zip(columns, row))
-            return None
-        except Exception as e:
-            print(f"Error updating hire vehicle dates: {e}")
-            self.conn.rollback()
-            return None
+        # First, check if a rental agreement exists for this claim
+        with self.conn.cursor() as cur:
+            cur.execute("""
+                SELECT rental_agreement_id 
+                FROM rental_agreements 
+                WHERE claim_id = %s
+                ORDER BY rental_agreement_id ASC
+                LIMIT 1;
+            """, (claim_id,))
+            existing = cur.fetchone()
+        
+        if existing:
+            # Update the existing rental agreement (the one with smallest ID)
+            query = f"""
+                UPDATE rental_agreements
+                SET {', '.join(fields)}
+                WHERE claim_id = %s
+                AND rental_agreement_id = %s
+                RETURNING *;
+            """
+            params["rental_agreement_id"] = existing[0]
+            
+            try:
+                with self.conn.cursor() as cur:
+                    cur.execute(query, params)
+                    row = cur.fetchone()
+                    if row:
+                        self.conn.commit()
+                        self.refresh_rental_agreements_view()
+                        
+                        # Log the changes
+                        if updated_by:
+                            current_date = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                            self.insert_claim_change(
+                                claim_id=claim_id,
+                                user_name=updated_by,
+                                date=current_date,
+                                form="Claim Dashboard",
+                                fields=["Hire Vehicle Dates"]  # General field name for the dashboard log
+                            )
+                        
+                        columns = [desc[0] for desc in cur.description]
+                        return dict(zip(columns, row))
+                return None
+            except Exception as e:
+                print(f"Error updating hire vehicle dates: {e}")
+                self.conn.rollback()
+                return None
+        else:
+            # No rental agreement exists, insert a new one
+            query = f"""
+                INSERT INTO rental_agreements (claim_id, hire_vehicle_date_in, hire_vehicle_date_out)
+                VALUES (%(claim_id)s, %(date_in)s, %(date_out)s)
+                RETURNING *;
+            """
+            
+            try:
+                with self.conn.cursor() as cur:
+                    cur.execute(query, params)
+                    row = cur.fetchone()
+                    if row:
+                        self.conn.commit()
+                        self.refresh_rental_agreements_view()
+                        
+                        # Log the changes
+                        if updated_by:
+                            current_date = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+                            self.insert_claim_change(
+                                claim_id=claim_id,
+                                user_name=updated_by,
+                                date=current_date,
+                                form="Claim Dashboard",
+                                fields=["Hire Vehicle Dates"]  # General field name for the dashboard log
+                            )
+                        
+                        columns = [desc[0] for desc in cur.description]
+                        return dict(zip(columns, row))
+                return None
+            except Exception as e:
+                print(f"Error inserting hire vehicle dates: {e}")
+                self.conn.rollback()
+                return None
 
 
     def refresh_rental_agreements_view(self):
@@ -3489,9 +3540,6 @@ class ClaimFormQueries:
         except Exception as e:
             print(f"Error refreshing materialized view: {e}")
             self.conn.rollback()
-
-
-
     def add_update(self, claim_id: str, new_update: dict, user_id: int) -> bool:
         query = """
             UPDATE claims
