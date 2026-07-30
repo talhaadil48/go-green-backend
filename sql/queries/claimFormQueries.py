@@ -1308,6 +1308,21 @@ class ClaimFormQueries:
     
     def get_all_claims(self) -> list[dict]:
         query = """
+        WITH rental_agreements_filtered AS (
+            -- Get the oldest rental agreement for each claim (smallest rental_agreement_id)
+            SELECT DISTINCT ON (claim_id)
+                claim_id,
+                rental_agreement_id,
+                hire_vehicle_reg,
+                hire_vehicle_date_out,
+                hire_vehicle_date_in,
+                change_vehicle_history,
+                hire_vehicle_miles_out,
+                hire_vehicle_miles_in
+            FROM rental_agreements
+            WHERE hire_vehicle_date_out IS NOT NULL  -- Only agreements that have actually started
+            ORDER BY claim_id, rental_agreement_id ASC  -- ASC = oldest first
+        )
         SELECT
             c.*,
             
@@ -1371,7 +1386,13 @@ class ClaimFormQueries:
                 ) AS all_vehicles
                 ORDER BY date_out DESC
                 LIMIT 1
-            ) AS latest_vehicle_reg
+            ) AS latest_vehicle_reg,
+
+            -- Include rental agreement IDs for reference
+            ra.rental_agreement_id AS rental_agreement_id,
+            ra.hire_vehicle_reg AS hire_vehicle_reg,
+            ra.hire_vehicle_date_out AS hire_vehicle_date_out,
+            ra.hire_vehicle_date_in AS hire_vehicle_date_in
 
         FROM claims c
 
@@ -1386,7 +1407,7 @@ class ClaimFormQueries:
         ) i
         ON c.claim_id = i.claim_id
 
-        LEFT JOIN rental_agreements ra
+        LEFT JOIN rental_agreements_filtered ra
         ON c.claim_id = ra.claim_id
 
         WHERE c.recently_deleted = FALSE;
@@ -1396,6 +1417,7 @@ class ClaimFormQueries:
             rows = cur.fetchall()
             columns = [desc[0] for desc in cur.description]
             return [dict(zip(columns, row)) for row in rows]
+
 
         
     def get_claim_by_id(self, claim_id: str) -> dict | None:
