@@ -764,11 +764,11 @@ class ClaimFormQueries:
                 print(f"[ERROR] Vehicle {reg} does not exist")
                 raise ValueError(f"Vehicle {reg} does not exist")
 
-            if not status["is_available"]:
-                print(f"[ERROR] Vehicle {reg} is occupied by claim_id {status['claim_id']}")
-                raise ValueError(
-                    f"Vehicle {reg} is already occupied by claim_id {status['claim_id']}"
-                )
+            # if not status["is_available"]:
+            #     print(f"[ERROR] Vehicle {reg} is occupied by claim_id {status['claim_id']}")
+            #     raise ValueError(
+            #         f"Vehicle {reg} is already occupied by claim_id {status['claim_id']}"
+            #     )
 
         # --- PREPARE DATA FOR DB ---
         updatable_columns = [
@@ -1049,6 +1049,8 @@ class ClaimFormQueries:
             print(f"Error in upsert_rental_agreement: {e}")
             self.conn.rollback()
             return None
+
+        
     def check_is_available(self, vehicle_reg: str):
         query = """
             SELECT 
