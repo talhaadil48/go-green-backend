@@ -409,23 +409,36 @@ class ClaimFormQueries:
 
 
     def insert_claim(
-        self,
-        claimant_name: str | None,
-        claim_type: str | None,
-        council: str | None,               # ← new parameter
-        claim_id: str | None = None
-        ) -> bool:
-        query = """
-            INSERT INTO claims (claim_id, claimant_name, claim_type, council)
-            VALUES (%s, %s, %s, %s);
-        """
-        with self.conn.cursor() as cur:
-            cur.execute(query, (claim_id, claimant_name, claim_type, council))
-            self.insert_invoice(claim_id)
-            self.conn.commit()
-        return True
-    
-
+            self,
+            claimant_name: str | None,
+            claim_type: str | None,
+            council: str | None,
+            claim_id: str | None = None
+            ) -> bool:
+            
+            # If claim_id is provided, use it; otherwise let DB auto-generate
+            if claim_id is not None:
+                query = """
+                    INSERT INTO claims (claim_id, claimant_name, claim_type, council)
+                    VALUES (%s, %s, %s, %s)
+                    RETURNING claim_id;
+                """
+                params = (claim_id, claimant_name, claim_type, council)
+            else:
+                # Let database auto-generate the ID
+                query = """
+                    INSERT INTO claims (claimant_name, claim_type, council)
+                    VALUES (%s, %s, %s)
+                    RETURNING claim_id;
+                """
+                params = (claimant_name, claim_type, council)
+            
+            with self.conn.cursor() as cur:
+                cur.execute(query, params)
+                generated_id = cur.fetchone()[0]  # Get the auto-generated ID
+                self.insert_invoice(generated_id)  # Use the generated ID
+                self.conn.commit()
+            return True
 
     def delete_claim(self, claim_id: str) -> bool:
         query = """
@@ -3427,8 +3440,15 @@ class ClaimFormQueries:
             return None
 
     def update_hire_vehicle_dates(self, claim_id: str, date_in: str = None, date_out: str = None, updated_by: str = None) -> dict | None:
+        # First validate that the claim exists
+        with self.conn.cursor() as cur:
+            cur.execute("SELECT claim_id FROM claims WHERE claim_id = %s AND recently_deleted = FALSE", (claim_id,))
+            if not cur.fetchone():
+                print(f"Claim {claim_id} does not exist or is deleted")
+                return None
+        
         fields = []
-        updated_fields_log = []  # List to track the exact field names being updated for the history log
+        updated_fields_log = []
         params = {"claim_id": claim_id}
 
         if date_in is not None:
@@ -3459,24 +3479,23 @@ class ClaimFormQueries:
             """, (claim_id,))
             existing = cur.fetchone()
         
-        if existing:
-            # Update the existing rental agreement (the one with smallest ID)
-            query = f"""
-                UPDATE rental_agreements
-                SET {', '.join(fields)}
-                WHERE claim_id = %s
-                AND rental_agreement_id = %s
-                RETURNING *;
-            """
-            params["rental_agreement_id"] = existing[0]
-            
-            try:
+        try:
+            if existing:
+                # Update the existing rental agreement (the one with smallest ID)
+                query = f"""
+                    UPDATE rental_agreements
+                    SET {', '.join(fields)}
+                    WHERE claim_id = %(claim_id)s
+                    AND rental_agreement_id = %(rental_agreement_id)s
+                    RETURNING *;
+                """
+                params["rental_agreement_id"] = existing[0]
+                
                 with self.conn.cursor() as cur:
                     cur.execute(query, params)
                     row = cur.fetchone()
                     if row:
                         self.conn.commit()
-                        self.refresh_rental_agreements_view()
                         
                         # Log the changes
                         if updated_by:
@@ -3486,31 +3505,24 @@ class ClaimFormQueries:
                                 user_name=updated_by,
                                 date=current_date,
                                 form="Claim Dashboard",
-                                fields=["Hire Vehicle Dates"]  # General field name for the dashboard log
+                                fields=["Hire Vehicle Dates"]
                             )
                         
                         columns = [desc[0] for desc in cur.description]
                         return dict(zip(columns, row))
-                return None
-            except Exception as e:
-                print(f"Error updating hire vehicle dates: {e}")
-                self.conn.rollback()
-                return None
-        else:
-            # No rental agreement exists, insert a new one
-            query = f"""
-                INSERT INTO rental_agreements (claim_id, hire_vehicle_date_in, hire_vehicle_date_out)
-                VALUES (%(claim_id)s, %(date_in)s, %(date_out)s)
-                RETURNING *;
-            """
-            
-            try:
+            else:
+                # No rental agreement exists, insert a new one
+                query = """
+                    INSERT INTO rental_agreements (claim_id, hire_vehicle_date_in, hire_vehicle_date_out)
+                    VALUES (%(claim_id)s, %(date_in)s, %(date_out)s)
+                    RETURNING *;
+                """
+                
                 with self.conn.cursor() as cur:
                     cur.execute(query, params)
                     row = cur.fetchone()
                     if row:
                         self.conn.commit()
-                        self.refresh_rental_agreements_view()
                         
                         # Log the changes
                         if updated_by:
@@ -3520,18 +3532,17 @@ class ClaimFormQueries:
                                 user_name=updated_by,
                                 date=current_date,
                                 form="Claim Dashboard",
-                                fields=["Hire Vehicle Dates"]  # General field name for the dashboard log
+                                fields=["Hire Vehicle Dates"]
                             )
                         
                         columns = [desc[0] for desc in cur.description]
                         return dict(zip(columns, row))
-                return None
-            except Exception as e:
-                print(f"Error inserting hire vehicle dates: {e}")
-                self.conn.rollback()
-                return None
-
-
+            
+            return None
+        except Exception as e:
+            print(f"Error updating/inserting hire vehicle dates: {e}")
+            self.conn.rollback()
+            return None
     def refresh_rental_agreements_view(self):
         try:
             with self.conn.cursor() as cur:
