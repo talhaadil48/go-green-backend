@@ -1055,7 +1055,6 @@ class ClaimFormQueries:
                         self.update_claim_status(claim_id, "hire end")
 
                 self.conn.commit()
-                self.refresh_rental_agreements_view()
                 return result
 
         except Exception as e:
