@@ -491,22 +491,53 @@ class ClaimFormQueries:
             raise
 
 
-    def upsert_rental_agreement(self, claim_id: str, data: dict) -> dict | None:
+    def upsert_rental_agreement(self, claim_id: str, data: dict, rental_agreement_id: str = None) -> dict | None:
+        """
+        Create or update rental agreement with support for multiple agreements per claim_id.
         
-        def get_existing_rental():
-            query = """
-                SELECT
-                    hire_vehicle_reg,
-                    hire_vehicle_date_out,
-                    hire_vehicle_date_in,
-                    change_vehicle_history
-                FROM rental_agreements
-                WHERE claim_id = %s;
-            """
-            print(f"[DEBUG] Fetching existing rental for claim_id={claim_id}")
+        Args:
+            claim_id: The claim ID
+            data: Dictionary of fields to update
+            rental_agreement_id: Optional - if provided, updates specific agreement,
+                                if not provided, creates a new one
+        
+        Returns:
+            dict: The saved rental agreement record
+        """
+        
+        def get_existing_rental(agreement_id: str = None):
+            if agreement_id:
+                query = """
+                    SELECT
+                        rental_agreement_id,
+                        hire_vehicle_reg,
+                        hire_vehicle_date_out,
+                        hire_vehicle_date_in,
+                        change_vehicle_history
+                    FROM rental_agreements
+                    WHERE rental_agreement_id = %s;
+                """
+                params = (agreement_id,)
+            else:
+                # Get the latest agreement for this claim_id (optional - you might want different logic)
+                query = """
+                    SELECT
+                        rental_agreement_id,
+                        hire_vehicle_reg,
+                        hire_vehicle_date_out,
+                        hire_vehicle_date_in,
+                        change_vehicle_history
+                    FROM rental_agreements
+                    WHERE claim_id = %s
+                    ORDER BY rental_agreement_id DESC
+                    LIMIT 1;
+                """
+                params = (claim_id,)
+            
+            print(f"[DEBUG] Fetching existing rental for claim_id={claim_id}, agreement_id={agreement_id}")
 
             with self.conn.cursor() as cur:
-                cur.execute(query, (claim_id,))
+                cur.execute(query, params)
                 row = cur.fetchone()
 
                 if not row:
@@ -568,7 +599,6 @@ class ClaimFormQueries:
                         miles_in_val,
                         miles_out_val,
                     )
-
                 elif new_out and new_in:
                     print("ACTION -> insert_fleet_history (closed hire)")
                     self.insert_fleet_history(
@@ -579,7 +609,6 @@ class ClaimFormQueries:
                         miles_in_val,
                         miles_out_val,
                     )
-
                 else:
                     print("Nothing to insert")
 
@@ -600,7 +629,6 @@ class ClaimFormQueries:
                         miles_in=miles_in_val,
                         miles_out=miles_out_val,
                     )
-
                 else:
                     print("No update required")
             # CASE 3
@@ -616,7 +644,6 @@ class ClaimFormQueries:
                     miles_in=miles_in_val,
                     miles_out=miles_out_val,
                 )
-
             else:
                 print("Reached unexpected state")
 
@@ -655,11 +682,12 @@ class ClaimFormQueries:
             is_available = not is_currently_hired
             self.update_is_available(reg_no, is_available)
             print(f"[DEBUG] Recalculated availability for {reg_no}: {is_available}")
+        
         # ---------------------------
         # START MAIN EXECUTION
         # ---------------------------
 
-        existing = get_existing_rental()
+        existing = get_existing_rental(rental_agreement_id)
         print(f"[DEBUG] Existing rental data: {existing}")
 
         # --- OLD REGS ---
@@ -693,7 +721,6 @@ class ClaimFormQueries:
                 print(f"[ERROR] Failed to parse incoming change_vehicle_history: {e}")
                 change_history = []
 
-
         # ==========================================
         # ADD IDS TO CHANGE VEHICLE HISTORY
         # ==========================================
@@ -708,12 +735,10 @@ class ClaimFormQueries:
 
         next_id = max(existing_ids, default=0) + 1
 
-
         for item in change_history:
             if not item.get("id"):
                 item["id"] = next_id
                 next_id += 1
-
 
         print("[DEBUG] change_vehicle_history after ID assignment")
         print(change_history)
@@ -771,11 +796,12 @@ class ClaimFormQueries:
             "declaration_date", "liability_date",
             "hirer_signature_terms", "company_signature",
             "hirer_signature_insurance", "declaration_signature", "liability_signature",
-            "change_vehicle_history", "hire_vehicle_miles_out", "hire_vehicle_miles_in"
+            "change_vehicle_history", "hire_vehicle_miles_out", "hire_vehicle_miles_in","valid_from", "valid_till"
         ]
 
         fields_to_update = [col for col in updatable_columns if col in data]
-        if not fields_to_update:
+        if not fields_to_update and not rental_agreement_id:
+            # If creating new with no data fields, return None
             return None
 
         changed_fields = []
@@ -793,7 +819,19 @@ class ClaimFormQueries:
         try:
             with self.conn.cursor() as cur:
                 # 1. Check if entry already exists and get old values for comparison
-                cur.execute("SELECT * FROM rental_agreements WHERE claim_id = %(claim_id)s", {"claim_id": claim_id})
+                if rental_agreement_id:
+                    # Update specific agreement by ID
+                    cur.execute(
+                        "SELECT * FROM rental_agreements WHERE rental_agreement_id = %s", 
+                        (rental_agreement_id,)
+                    )
+                else:
+                    # Check if there's already an agreement for this claim_id (optional - you might want to allow multiple)
+                    cur.execute(
+                        "SELECT * FROM rental_agreements WHERE claim_id = %s ORDER BY rental_agreement_id DESC LIMIT 1", 
+                        (claim_id,)
+                    )
+                
                 old_row = cur.fetchone()
                 record_exists = old_row is not None
 
@@ -801,54 +839,62 @@ class ClaimFormQueries:
                     columns = [desc[0] for desc in cur.description]
                     old_dict = dict(zip(columns, old_row))
                     
-                    for col in fields_to_update:
-                        old_val = old_dict.get(col)
-                        new_val = data[col]
-                        
-                        # Special handling for JSON field comparison
-                        if col == "change_vehicle_history":
-                            if isinstance(old_val, str):
-                                try:
-                                    old_val = json.loads(old_val)
-                                except Exception:
-                                    pass
+                    # Check if we're updating the same record or need to create a new one
+                    if rental_agreement_id and old_dict.get("claim_id") != claim_id:
+                        # If rental_agreement_id belongs to a different claim_id, we should create a new record
+                        record_exists = False
+                        old_dict = {}
+                    else:
+                        for col in fields_to_update:
+                            old_val = old_dict.get(col)
+                            new_val = data[col]
                             
-                            # Remove 'fromApi' from old_val to avoid false comparison
-                            if isinstance(old_val, list):
-                                for item in old_val:
-                                    if isinstance(item, dict):
-                                        item.pop("fromApi", None)
-                                        
-                            # Remove 'fromApi' from new_val to avoid false comparison
-                            if isinstance(new_val, list):
-                                for item in new_val:
-                                    if isinstance(item, dict):
-                                        item.pop("fromApi", None)
+                            # Special handling for JSON field comparison
+                            if col == "change_vehicle_history":
+                                if isinstance(old_val, str):
+                                    try:
+                                        old_val = json.loads(old_val)
+                                    except Exception:
+                                        pass
+                                
+                                # Remove 'fromApi' from old_val to avoid false comparison
+                                if isinstance(old_val, list):
+                                    for item in old_val:
+                                        if isinstance(item, dict):
+                                            item.pop("fromApi", None)
+                                            
+                                # Remove 'fromApi' from new_val to avoid false comparison
+                                if isinstance(new_val, list):
+                                    for item in new_val:
+                                        if isinstance(item, dict):
+                                            item.pop("fromApi", None)
 
-                        if isinstance(old_val, (date, Decimal)):
-                            old_val = str(old_val)
-                        
-                        # Normalize empty strings to None for comparison to avoid false positives
-                        comp_old = None if old_val == "" else old_val
-                        comp_new = None if new_val == "" else new_val
-                        
-                        if comp_old != comp_new:
-                            print(f"[DEBUG] CHANGE detected in '{col}': OLD = {comp_old}, NEW = {comp_new}")
-                            changed_fields.append(col)
-                        else:
-                            print(f"[DEBUG] NO CHANGE in '{col}': value remains {comp_old}")
+                            if isinstance(old_val, (date, Decimal)):
+                                old_val = str(old_val)
+                            
+                            # Normalize empty strings to None for comparison to avoid false positives
+                            comp_old = None if old_val == "" else old_val
+                            comp_new = None if new_val == "" else new_val
+                            
+                            if comp_old != comp_new:
+                                print(f"[DEBUG] CHANGE detected in '{col}': OLD = {comp_old}, NEW = {comp_new}")
+                                changed_fields.append(col)
+                            else:
+                                print(f"[DEBUG] NO CHANGE in '{col}': value remains {comp_old}")
                 else:
                     changed_fields = [col for col in fields_to_update if data.get(col) is not None and data.get(col) != "" and data.get(col) != 'No' and data.get(col) != [] and data.get(col) != False]
 
-                if record_exists:
-                    # 2a. UPDATE existing entry
+                # Build the query based on whether we're updating or inserting
+                if record_exists and rental_agreement_id:
+                    # 2a. UPDATE existing entry by rental_agreement_id
                     set_clause = ", ".join(f"{col} = %({col})s" for col in fields_to_update)
                     query = f"""
                         UPDATE rental_agreements 
                         SET {set_clause}
-                        WHERE claim_id = %(claim_id)s
+                        WHERE rental_agreement_id = %(rental_agreement_id)s
                         RETURNING *;
                     """
+                    params["rental_agreement_id"] = rental_agreement_id
                 else:
                     # 2b. INSERT new entry
                     insert_columns = ["claim_id"] + fields_to_update
@@ -871,7 +917,7 @@ class ClaimFormQueries:
 
                 # Log changes history if anything was updated or inserted
                 if changed_fields:
-                    self.insert_claim_change(claim_id, user_name, current_date, "Rental Agreements", changed_fields)
+                    self.insert_claim_change(claim_id, user_name, current_date, f"Rental Agreements {rental_agreement_id}", changed_fields)
 
                 col_names = [desc[0] for desc in cur.description]
                 result = dict(zip(col_names, row))
@@ -909,17 +955,14 @@ class ClaimFormQueries:
                 }
 
                 for change in new_history:
-
                     change_id = change.get("id")
                     change_reg = change.get("vehicle_reg")
 
                     if not change_reg:
                         continue
 
-
                     # Find old history using ID
                     old = old_map.get(change_id, {})
-
 
                     change_old_out = old.get("date_out")
                     change_old_in = old.get("date_in")
@@ -930,14 +973,12 @@ class ClaimFormQueries:
                     miles_in = change.get("miles_in")
                     miles_out = change.get("miles_out")
 
-
                     print("\nCHANGE VEHICLE MATCH")
                     print(f"id        : {change_id}")
                     print(f"old_out   : {change_old_out}")
                     print(f"old_in    : {change_old_in}")
                     print(f"new_out   : {change_new_out}")
                     print(f"new_in    : {change_new_in}")
-
 
                     handle_fleet_history(
                         change_reg,
@@ -949,7 +990,6 @@ class ClaimFormQueries:
                         miles_in
                     )
 
-
                 # ---------------------------
                 # 🚗 NEW AVAILABILITY LOGIC 
                 # ---------------------------
@@ -959,7 +999,6 @@ class ClaimFormQueries:
                 for r in all_regs_to_recalculate:
                     # Dynamically check true state across the DB for each affected car
                     recalculate_car_availability(r)
-
 
                 # ---------------------------
                 # 📊 CLAIM STATUS LOGIC
@@ -1002,7 +1041,6 @@ class ClaimFormQueries:
                     elif latest_entry.get("date_out") and latest_entry.get("date_in"):
                         self.update_claim_status(claim_id, "hire end")
 
-
                 self.conn.commit()
                 self.refresh_rental_agreements_view()
                 return result
@@ -1011,8 +1049,6 @@ class ClaimFormQueries:
             print(f"Error in upsert_rental_agreement: {e}")
             self.conn.rollback()
             return None
-
-
     def check_is_available(self, vehicle_reg: str):
         query = """
             SELECT 
@@ -1206,15 +1242,67 @@ class ClaimFormQueries:
                 return dict(zip(columns, row))
         return None
 
-    def get_rental_agreement(self, claim_id: str) -> dict | None:
-        query = "SELECT * FROM rental_agreements WHERE claim_id = %s;"
+    # ============================================
+    def get_rental_agreements_by_claim(self, claim_id: str) -> list:
+        """
+        Get all rental agreements for a claim.
+        Returns list of agreements with basic info.
+        """
+        query = """
+            SELECT 
+                rental_agreement_id,
+                claim_id,
+                valid_from,
+                valid_till,
+                hire_vehicle_reg,
+                hirer_name,
+                user_name,
+                total_cost
+            FROM rental_agreements
+            WHERE claim_id = %s
+            ORDER BY rental_agreement_id DESC;
+        """
+        
         with self.conn.cursor() as cur:
             cur.execute(query, (claim_id,))
+            rows = cur.fetchall()
+            
+            if not rows:
+                return []
+            
+            columns = [desc[0] for desc in cur.description]
+            results = [dict(zip(columns, row)) for row in rows]
+            
+            return results
+
+    def get_rental_agreement(
+    self,
+    claim_id: str,
+    rental_agreement_id: int
+) -> dict | None:
+
+        query = """
+            SELECT *
+            FROM rental_agreements
+            WHERE claim_id = %s
+            AND rental_agreement_id = %s;
+        """
+
+        with self.conn.cursor() as cur:
+            cur.execute(
+                query,
+                (claim_id, rental_agreement_id)
+            )
+
             row = cur.fetchone()
+
             if row:
                 columns = [desc[0] for desc in cur.description]
                 return dict(zip(columns, row))
+
         return None
+
+    
     
     def get_all_claims(self) -> list[dict]:
         query = """
@@ -3396,11 +3484,11 @@ ORDER BY i.invoice_datetime DESC;
             # 👉 extract message safely
             message = new_update.get("message", "New update added")
 
-            self.broadcast_notification(
-                user_id,
-                claim_id,
-                message
-            )
+            # self.broadcast_notification(
+            #     user_id,
+            #     claim_id,
+            #     message
+            # )
 
             return cur.rowcount > 0
         

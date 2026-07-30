@@ -243,19 +243,89 @@ async def get_storage_form(claim_id: str) -> Dict[str, Any]:
         "storage_location_key": result.get("storage_location_key", "") 
     }
 
-@router.get("/rental-agreements/{claim_id}")
-async def get_rental_agreement(claim_id: str) -> Dict[str, Any]:
+
+
+
+@router.get("/claims/{claim_id}/rental-agreements")
+async def get_rental_agreements_by_claim(claim_id: str) -> Dict[str, Any]:
+    """
+    Get all rental agreements for a specific claim.
+    
+    Returns a list of rental agreements with basic info.
+    """
+    if not claim_id or not claim_id.strip():
+        raise HTTPException(
+            status_code=400,
+            detail="claim_id is required and must be a non-empty string"
+        )
+
     conn = DBConnection.get_connection()
     queries = Queries(conn)
-    
-    result = queries.get_rental_agreement(claim_id)
+
+    try:
+        results = queries.get_rental_agreements_by_claim(claim_id)
+        
+        if not results:
+            return {
+                "claim_id": claim_id,
+                "rental_agreements": [],
+                "count": 0,
+                "message": "No rental agreements found for this claim"
+            }
+
+        # Return list of agreements with basic info
+        return {
+            "claim_id": claim_id,
+            "rental_agreements": [
+                {
+                    "rental_agreement_id": r["rental_agreement_id"],
+                    "valid_from": r.get("valid_from", ""),
+                    "valid_till": r.get("valid_till", ""),
+                    "hire_vehicle_reg": r.get("hire_vehicle_reg", ""),
+                    "hirer_name": r.get("hirer_name", ""),
+                    "total_cost": r.get("total_cost"),
+                    "user_name" : r.get("user_name", "")
+                
+                }
+                for r in results
+            ],
+            "count": len(results)
+        }
+
+    except Exception as e:
+        print(f"Error fetching rental agreements: {e}")
+        raise HTTPException(
+            status_code=500,
+            detail="Internal server error"
+        )
+
+
+
+@router.get("/claims/{claim_id}/rental-agreements/{rental_agreement_id}")
+async def get_rental_agreement(
+    claim_id: str,
+    rental_agreement_id: int
+) -> Dict[str, Any]:
+    conn = DBConnection.get_connection()
+    queries = Queries(conn)
+
+    result = queries.get_rental_agreement(
+        claim_id,
+        rental_agreement_id
+    )
+
     if not result:
         raise HTTPException(status_code=404, detail="Rental agreement not found")
-    
+
     response = {
         "user_name": result.get("user_name", ""),
         "rental_agreement_id": result["rental_agreement_id"],
         "claim_id": result["claim_id"],
+
+        # validity dates
+        "valid_from": result.get("valid_from", ""),
+        "valid_till": result.get("valid_till", ""),
+
         "hirer_name": result.get("hirer_name", ""),
         "title": result.get("title", ""),
         "permanent_address": result.get("permanent_address", ""),
@@ -266,31 +336,38 @@ async def get_rental_agreement(claim_id: str) -> Dict[str, Any]:
         "dob": result.get("dob", ""),
         "date_test_passed": result.get("date_test_passed", ""),
         "occupation": result.get("occupation", ""),
+
         "daily_rate": result.get("daily_rate"),
         "policy_excess": result.get("policy_excess"),
         "deposit": result.get("deposit"),
         "refuelling_charge": result.get("refuelling_charge"),
+
         "insurance_company": result.get("insurance_company", ""),
         "policy_no": result.get("policy_no", ""),
         "insurance_dates": result.get("insurance_dates", ""),
         "own_insurance_confirm": result.get("own_insurance_confirm", "No"),
         "insurance_date": result.get("insurance_date", ""),
         "insurance_time": result.get("insurance_time", ""),
+
         "new_licence_no": result.get("new_licence_no", ""),
         "new_date_issued": result.get("new_date_issued", ""),
         "new_expiry_date": result.get("new_expiry_date", ""),
         "new_dob": result.get("new_dob", ""),
         "new_date_test_passed": result.get("new_date_test_passed", ""),
         "new_occupation": result.get("new_occupation", ""),
+
         "motoring_offence_3yrs": result.get("motoring_offence_3yrs", ""),
         "disqualified_5yrs": result.get("disqualified_5yrs", ""),
         "accident_3yrs": result.get("accident_3yrs", ""),
         "insurance_declined_5yrs": result.get("insurance_declined_5yrs", ""),
         "dishonesty_conviction": result.get("dishonesty_conviction", ""),
+
         "medical_condition1": result.get("medical_condition1", ""),
         "medical_condition2": result.get("medical_condition2", ""),
         "medical_details": result.get("medical_details", ""),
+
         "additional_driver_auth": result.get("additional_driver_auth", ""),
+
         "hire_vehicle_reg": result.get("hire_vehicle_reg", ""),
         "hire_vehicle_make": result.get("hire_vehicle_make", ""),
         "hire_vehicle_model": result.get("hire_vehicle_model", ""),
@@ -300,6 +377,7 @@ async def get_rental_agreement(claim_id: str) -> Dict[str, Any]:
         "hire_vehicle_fuel_out": result.get("hire_vehicle_fuel_out", ""),
         "hire_vehicle_fuel_in": result.get("hire_vehicle_fuel_in", ""),
         "hire_vehicle_rate_per_day": result.get("hire_vehicle_rate_per_day", ""),
+
         "change_vehicle_reg": result.get("change_vehicle_reg", ""),
         "change_vehicle_make": result.get("change_vehicle_make", ""),
         "change_vehicle_model": result.get("change_vehicle_model", ""),
@@ -308,28 +386,36 @@ async def get_rental_agreement(claim_id: str) -> Dict[str, Any]:
         "change_vehicle_date_in": result.get("change_vehicle_date_in", ""),
         "change_vehicle_fuel_out": result.get("change_vehicle_fuel_out", ""),
         "change_vehicle_fuel_in": result.get("change_vehicle_fuel_in", ""),
+
         "admin_fee": result.get("admin_fee"),
         "delivery_charge": result.get("delivery_charge"),
         "cdw_per_day": result.get("cdw_per_day"),
+
         "days_out": result.get("days_out"),
         "days_in": result.get("days_in"),
         "total_days": result.get("total_days"),
         "rate_per_day": result.get("rate_per_day"),
+
         "refuelling_total": result.get("refuelling_total"),
         "subtotal": result.get("subtotal"),
         "vat": result.get("vat"),
         "total_cost": result.get("total_cost"),
+
         "declaration_date": result.get("declaration_date", ""),
         "liability_date": result.get("liability_date", ""),
+
         "hirer_signature_terms": result.get("hirer_signature_terms"),
         "company_signature": result.get("company_signature"),
         "hirer_signature_insurance": result.get("hirer_signature_insurance"),
         "declaration_signature": result.get("declaration_signature"),
         "liability_signature": result.get("liability_signature"),
+
         "change_vehicle_history": result.get("change_vehicle_history", ""),
+
         "hire_vehicle_miles_out": result.get("hire_vehicle_miles_out", ""),
         "hire_vehicle_miles_in": result.get("hire_vehicle_miles_in", "")
     }
+
     return response
 
 @router.post("/claims")

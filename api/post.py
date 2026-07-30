@@ -313,9 +313,11 @@ async def upsert_storage_form(request: Request) -> Dict[str, Any]:
 async def upsert_rental_agreement(request: Request) -> Dict[str, Any]:
     """
     Create or update rental agreement.
+    
     - claim_id is REQUIRED in the request body
-    - Uses upsert logic based on claim_id (UNIQUE constraint)
-    - Supports partial updates
+    - rental_agreement_id is OPTIONAL - if provided, updates that specific agreement
+    - If no rental_agreement_id provided, creates a new agreement for the claim_id
+    - Supports partial updates when rental_agreement_id is provided
     """
     try:
         incoming_data: dict = await request.json()
@@ -329,15 +331,18 @@ async def upsert_rental_agreement(request: Request) -> Dict[str, Any]:
             detail="claim_id is required and must be a non-empty string in the request body"
         )
 
-    # Remove claim_id from the fields we're updating
-    update_data = {k: v for k, v in incoming_data.items() if k != "claim_id"}
+    # Get rental_agreement_id if provided (optional)
+    rental_agreement_id = incoming_data.get("rental_agreement_id")
+    
+    # Remove claim_id and rental_agreement_id from the fields we're updating
+    update_data = {k: v for k, v in incoming_data.items() if k not in ["claim_id", "rental_agreement_id"]}
 
     conn = DBConnection.get_connection()
     queries = Queries(conn)
 
     try:
-        result = queries.upsert_rental_agreement(claim_id, update_data)
-
+        result = queries.upsert_rental_agreement(claim_id, update_data, rental_agreement_id)
+        
     except ValueError as e:
         # Business logic error (vehicle not available, etc.)
         print("Business logic error:", e)
@@ -345,7 +350,6 @@ async def upsert_rental_agreement(request: Request) -> Dict[str, Any]:
             status_code=409,  # conflict (better than 400 here)
             detail=str(e)
         )
-
     except Exception as e:
         # Unexpected server error
         print("Unexpected error:", e)
@@ -357,77 +361,12 @@ async def upsert_rental_agreement(request: Request) -> Dict[str, Any]:
     if not result:
         raise HTTPException(status_code=500, detail="Failed to save rental agreement")
 
-    # Format response – same style as your example
-    response = {
+    # Return minimal response with just the IDs
+    return {
         "rental_agreement_id": result["rental_agreement_id"],
         "claim_id": result["claim_id"],
-        "hirer_name": result.get("hirer_name", ""),
-        "title": result.get("title", ""),
-        "permanent_address": result.get("permanent_address", ""),
-        "additional_driver_name": result.get("additional_driver_name", ""),
-        "licence_no": result.get("licence_no", ""),
-        "date_issued": result.get("date_issued", ""),
-        "expiry_date": result.get("expiry_date", ""),
-        "dob": result.get("dob", ""),
-        "date_test_passed": result.get("date_test_passed", ""),
-        "occupation": result.get("occupation", ""),
-        "daily_rate": result.get("daily_rate"),
-        "policy_excess": result.get("policy_excess"),
-        "deposit": result.get("deposit"),
-        "refuelling_charge": result.get("refuelling_charge"),
-        "insurance_company": result.get("insurance_company", ""),
-        "policy_no": result.get("policy_no", ""),
-        "insurance_dates": result.get("insurance_dates", ""),
-        "own_insurance_confirm": result.get("own_insurance_confirm", "No"),
-        "insurance_date": result.get("insurance_date", ""),
-        "insurance_time": result.get("insurance_time", ""),
-        "motoring_offence_3yrs": result.get("motoring_offence_3yrs", ""),
-        "disqualified_5yrs": result.get("disqualified_5yrs", ""),
-        "accident_3yrs": result.get("accident_3yrs", ""),
-        "insurance_declined_5yrs": result.get("insurance_declined_5yrs", ""),
-        "dishonesty_conviction": result.get("dishonesty_conviction", ""),
-        "medical_condition1": result.get("medical_condition1", ""),
-        "medical_condition2": result.get("medical_condition2", ""),
-        "medical_details": result.get("medical_details", ""),
-        "additional_driver_auth": result.get("additional_driver_auth", ""),
-        "hire_vehicle_reg": result.get("hire_vehicle_reg", ""),
-        "hire_vehicle_make": result.get("hire_vehicle_make", ""),
-        "hire_vehicle_model": result.get("hire_vehicle_model", ""),
-        "hire_vehicle_group": result.get("hire_vehicle_group", ""),
-        "hire_vehicle_date_out": result.get("hire_vehicle_date_out", ""),
-        "hire_vehicle_date_in": result.get("hire_vehicle_date_in", ""),
-        "hire_vehicle_fuel_out": result.get("hire_vehicle_fuel_out", ""),
-        "hire_vehicle_fuel_in": result.get("hire_vehicle_fuel_in", ""),
-        "change_vehicle_reg": result.get("change_vehicle_reg", ""),
-        "change_vehicle_make": result.get("change_vehicle_make", ""),
-        "change_vehicle_model": result.get("change_vehicle_model", ""),
-        "change_vehicle_group": result.get("change_vehicle_group", ""),
-        "change_vehicle_date_out": result.get("change_vehicle_date_out", ""),
-        "change_vehicle_date_in": result.get("change_vehicle_date_in", ""),
-        "change_vehicle_fuel_out": result.get("change_vehicle_fuel_out", ""),
-        "change_vehicle_fuel_in": result.get("change_vehicle_fuel_in", ""),
-        "admin_fee": result.get("admin_fee"),
-        "delivery_charge": result.get("delivery_charge"),
-        "cdw_per_day": result.get("cdw_per_day"),
-        "days_out": result.get("days_out"),
-        "days_in": result.get("days_in"),
-        "total_days": result.get("total_days"),
-        "rate_per_day": result.get("rate_per_day"),
-        "refuelling_total": result.get("refuelling_total"),
-        "subtotal": result.get("subtotal"),
-        "vat": result.get("vat"),
-        "total_cost": result.get("total_cost"),
-        "declaration_date": result.get("declaration_date", ""),
-        "liability_date": result.get("liability_date", ""),
-        "hirer_signature_terms": result.get("hirer_signature_terms"),
-        "company_signature": result.get("company_signature"),
-        "hirer_signature_insurance": result.get("hirer_signature_insurance"),
-        "declaration_signature": result.get("declaration_signature"),
-        "liability_signature": result.get("liability_signature"),
+        "message": "Rental agreement saved successfully"
     }
-
-    return response
-
 
 
 

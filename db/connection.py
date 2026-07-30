@@ -36,6 +36,33 @@ class DBConnection:
             raise
 
     @classmethod
+    def _ensure_clean_connection(cls, conn):
+        """Ensure connection is in a clean state (no aborted transactions)."""
+        try:
+            # Test if connection works
+            with conn.cursor() as cur:
+                cur.execute("SELECT 1")
+            return conn
+        except psycopg2.errors.InFailedSqlTransaction:
+            # Transaction is aborted - roll it back
+            print("⚠️ Aborted transaction detected, rolling back...")
+            conn.rollback()
+            # Verify it worked
+            with conn.cursor() as cur:
+                cur.execute("SELECT 1")
+            return conn
+        except psycopg2.OperationalError:
+            # Connection is dead, will be recreated
+            raise
+        except Exception as e:
+            # Any other error, try to rollback
+            try:
+                conn.rollback()
+            except:
+                pass
+            raise e
+
+    @classmethod
     def get_connection(cls):
         """Return a live connection, reconnecting if necessary."""
         retries = 0
@@ -44,15 +71,18 @@ class DBConnection:
                 if cls._connection is None or cls._connection.closed != 0:
                     cls._connect()
                 else:
-                    # Test connection by ping
-                    with cls._connection.cursor() as cur:
-                        cur.execute("SELECT 1")
+                    # Ensure connection is clean before using
+                    cls._connection = cls._ensure_clean_connection(cls._connection)
                 return cls._connection
             except psycopg2.OperationalError:
                 print(f"Connection lost. Retrying in {cls._retry_delay} seconds...")
                 cls._connection = None
                 time.sleep(cls._retry_delay)
                 retries += 1
+            except Exception as e:
+                print(f"Error getting connection: {e}")
+                cls._connection = None
+                raise
 
         raise RuntimeError("Failed to connect to the database after multiple attempts.")
 
@@ -61,6 +91,7 @@ class DBConnection:
     def get_cursor(cls):
         """
         Context manager for a cursor that ensures the connection is alive.
+        Automatically handles transaction rollback on errors.
         Usage:
         with DBConnection.get_cursor() as cur:
             cur.execute(...)
@@ -70,7 +101,14 @@ class DBConnection:
         try:
             yield cursor
             conn.commit()
+        except psycopg2.errors.InFailedSqlTransaction:
+            # Aborted transaction - rollback and re-raise
+            print("⚠️ Aborted transaction in get_cursor, rolling back...")
+            conn.rollback()
+            raise
         except Exception as e:
+            # Rollback on any error
+            print(f"⚠️ Error in transaction, rolling back: {e}")
             conn.rollback()
             raise e
         finally:
@@ -83,7 +121,6 @@ class DBConnection:
             cls._connection.close()
             cls._connection = None
             print("Database connection closed.")
-
 
 
 def split_car_name_and_model():
@@ -100,16 +137,13 @@ def split_car_name_and_model():
 
 
 if __name__ == "__main__":
-    conn = DBConnection.get_connection()  # get your connection
+    # Test the connection with automatic rollback
     try:
-        conn.rollback()  # kill any bad transaction instantly
-    except:
-        pass  # if already clean, ignore
-
-    cur = conn.cursor()
-    cur.execute("SELECT 1")  # now works
-
-
-
-
+        conn = DBConnection.get_connection()
         
+        # This will work even if there's an aborted transaction
+        with conn.cursor() as cur:
+            cur.execute("SELECT 1")
+            print("✅ Database connection is working!")
+    except Exception as e:
+        print(f"❌ Error: {e}")
