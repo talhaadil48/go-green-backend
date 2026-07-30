@@ -3563,11 +3563,11 @@ class ClaimFormQueries:
             # 👉 extract message safely
             message = new_update.get("message", "New update added")
 
-            # self.broadcast_notification(
-            #     user_id,
-            #     claim_id,
-            #     message
-            # )
+            self.broadcast_notification(
+                user_id,
+                claim_id,
+                message
+            )
 
             return cur.rowcount > 0
         
