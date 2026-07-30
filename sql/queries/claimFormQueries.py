@@ -917,7 +917,7 @@ class ClaimFormQueries:
 
                 # Log changes history if anything was updated or inserted
                 if changed_fields:
-                    self.insert_claim_change(claim_id, user_name, current_date, f"Rental Agreements {rental_agreement_id}", changed_fields)
+                    self.insert_claim_change(claim_id, user_name, current_date, f"Rental Agreement", changed_fields)
 
                 col_names = [desc[0] for desc in cur.description]
                 result = dict(zip(col_names, row))
@@ -1845,122 +1845,120 @@ class ClaimFormQueries:
     def get_all_invoices(self):
 
         query = """
-           SELECT
-    i.id,
-    i.claim_id,
-    c.claimant_name,
-    c.claim_type,
-    i.invoice_datetime,
-    i.info,
-    i.docs,
-    i.storage_bill,
-    i.rent_bill,
-    i.user_name,
+            SELECT
+                i.id,
+                i.claim_id,
+                c.claimant_name,
+                c.claim_type,
+                i.invoice_datetime,
+                i.info,
+                i.docs,
+                i.storage_bill,
+                i.rent_bill,
+                i.user_name,
 
-    latest_offer.payment_received,
+                latest_offer.payment_received,
+                latest_offer.payment_status,
+                latest_offer.payment_received * 0.15 AS solicitor_fee,
+                latest_offer.date_received,
 
-    latest_offer.payment_status,
+                hire.hire_start_date,
+                hire.hire_end_date,
 
-    latest_offer.payment_received * 0.15 AS solicitor_fee,
+                CASE
+                    WHEN hire.hire_start_date IS NULL THEN NULL
+                    ELSE GREATEST(
+                        0,
+                        (
+                            COALESCE(
+                                hire.hire_end_date,
+                                CURRENT_DATE
+                            )
+                            - hire.hire_start_date
+                        ) + 1
+                    )
+                END AS hire_days
 
-    latest_offer.date_received,
+            FROM invoice i
 
-    hire.hire_start_date,
+            LEFT JOIN claims c
+                ON c.claim_id = i.claim_id
 
-    hire.hire_end_date,
+            LEFT JOIN rental_agreements ra
+                ON ra.claim_id = i.claim_id
 
-    CASE
-        WHEN hire.hire_start_date IS NULL THEN NULL
-        ELSE GREATEST(
-            0,
-            (
-                COALESCE(
-                    hire.hire_end_date,
-                    CURRENT_DATE
-                )
-                - hire.hire_start_date
-            ) + 1
-        )
-    END AS hire_days
+            LEFT JOIN offer o
+                ON o.claim_id = i.claim_id
 
-FROM invoice i
+            -- =====================================
+            -- PARSE JSON ONLY ONCE
+            -- =====================================
+            LEFT JOIN LATERAL (
+                SELECT
+                    MIN(NULLIF(j->>'date_out', '')::date) AS min_date_out,
+                    MAX(NULLIF(j->>'date_in', '')::date)  AS max_date_in,
+                    BOOL_OR(NULLIF(j->>'date_out', '') IS NOT NULL) AS has_date_out,
+                    BOOL_OR(NULLIF(j->>'date_in', '') IS NOT NULL)  AS has_date_in
+                FROM jsonb_array_elements(
+                    COALESCE(
+                        ra.change_vehicle_history::jsonb,
+                        '[]'::jsonb
+                    )
+                ) j
+            ) hist ON TRUE
 
-LEFT JOIN claims c
-    ON c.claim_id = i.claim_id
+            -- =====================================
+            -- HIRE CALCULATIONS
+            -- =====================================
+            LEFT JOIN LATERAL (
+                SELECT
+                    LEAST(
+                        ra.hire_vehicle_date_out,
+                        hist.min_date_out
+                    ) AS hire_start_date,
 
-LEFT JOIN rental_agreements ra
-    ON ra.claim_id = i.claim_id
+                    CASE
+                        WHEN ra.hire_vehicle_date_in IS NOT NULL
+                            AND hist.has_date_out
+                            AND NOT hist.has_date_in
+                        THEN NULL
+                        ELSE GREATEST(
+                            ra.hire_vehicle_date_in,
+                            hist.max_date_in
+                        )
+                    END AS hire_end_date
+            ) hire ON TRUE
 
-LEFT JOIN offer o
-    ON o.claim_id = i.claim_id
+            -- =====================================
+            -- OFFER CALCULATIONS (Offer 3 only, then Offer 1)
+            -- =====================================
+            LEFT JOIN LATERAL (
+                SELECT
+                    -- Payment received: check Offer 3 first, then Offer 1
+                    CASE
+                        WHEN o.offer3_status = 'paid' THEN o.offer3
+                        WHEN o.offer1_status = 'paid' THEN o.offer1
+                        ELSE NULL
+                    END AS payment_received,
 
--- =====================================
--- PARSE JSON ONLY ONCE
--- =====================================
-LEFT JOIN LATERAL (
-    SELECT
-        MIN(NULLIF(j->>'date_out', '')::date) AS min_date_out,
-        MAX(NULLIF(j->>'date_in', '')::date)  AS max_date_in,
-        BOOL_OR(NULLIF(j->>'date_out', '') IS NOT NULL) AS has_date_out,
-        BOOL_OR(NULLIF(j->>'date_in', '') IS NOT NULL)  AS has_date_in
-    FROM jsonb_array_elements(
-        COALESCE(
-            ra.change_vehicle_history::jsonb,
-            '[]'::jsonb
-        )
-    ) j
-) hist ON TRUE
+                    -- Payment status: check Offer 3 first, then Offer 1
+                    (
+                        COALESCE(o.offer3_status, '') = 'paid'
+                        OR COALESCE(o.offer1_status, '') = 'paid'
+                    ) AS payment_status,
 
--- =====================================
--- HIRE CALCULATIONS
--- =====================================
-LEFT JOIN LATERAL (
-    SELECT
-        LEAST(
-            ra.hire_vehicle_date_out,
-            hist.min_date_out
-        ) AS hire_start_date,
+                    -- Date received: check Offer 3 first, then Offer 1
+                    CASE
+                        WHEN o.offer3_status = 'paid' THEN o.offer3_date
+                        WHEN o.offer1_status = 'paid' THEN o.offer1_date
+                        ELSE NULL
+                    END AS date_received
 
-        CASE
-            WHEN ra.hire_vehicle_date_in IS NOT NULL
-                 AND hist.has_date_out
-                 AND NOT hist.has_date_in
-            THEN NULL
-            ELSE GREATEST(
-                ra.hire_vehicle_date_in,
-                hist.max_date_in
-            )
-        END AS hire_end_date
-) hire ON TRUE
+            ) latest_offer ON TRUE
 
--- =====================================
--- OFFER CALCULATIONS
--- =====================================
-LEFT JOIN LATERAL (
-    SELECT
-        CASE
-            WHEN o.offer3_status = 'paid' THEN o.offer3
-            WHEN o.offer2_status = 'paid' THEN o.offer2
-            WHEN o.offer1_status = 'paid' THEN o.offer1
-            ELSE NULL      -- or 0 if you prefer
-        END AS payment_received,
+            WHERE c.recently_deleted = FALSE
 
-        (
-            COALESCE(o.offer1_status, '') = 'paid'
-            OR COALESCE(o.offer2_status, '') = 'paid'
-            OR COALESCE(o.offer3_status, '') = 'paid'
-        ) AS payment_status,
-
-        CASE
-            WHEN o.offer3_status = 'paid' THEN o.offer3_date
-            WHEN o.offer2_status = 'paid' THEN o.offer2_date
-            WHEN o.offer1_status = 'paid' THEN o.offer1_date
-            ELSE NULL
-        END AS date_received
-) latest_offer ON TRUE
-WHERE c.recently_deleted = FALSE
-
-ORDER BY i.invoice_datetime DESC;
+            ORDER BY i.invoice_datetime DESC;
         """
 
         try:
@@ -1970,7 +1968,6 @@ ORDER BY i.invoice_datetime DESC;
         except Exception as e:
             print(f"Error fetching all invoices: {e}")
             return []
-
 
     def get_invoices_by_claim_id(self, claim_id: str):
         query = """
@@ -3854,10 +3851,13 @@ ORDER BY i.invoice_datetime DESC;
             SELECT 
                 o.*,
                 c.claim_type,
-                c.claimant_name
+                c.claimant_name,
+                COALESCE(i.rent_bill, 0) + COALESCE(i.storage_bill, 0) AS hire_storage
             FROM offer o
             LEFT JOIN claims c
                 ON c.claim_id = o.claim_id
+            LEFT JOIN invoice i
+                ON i.claim_id = o.claim_id
             WHERE o.seen = TRUE
             ORDER BY o.claim_id DESC;
         """
@@ -3865,7 +3865,6 @@ ORDER BY i.invoice_datetime DESC;
         with self.conn.cursor(cursor_factory=RealDictCursor) as cur:
             cur.execute(query)
             return cur.fetchall()
-
     # =========================
     # OFFER - UPDATE (ANY FIELD)
     # =========================
