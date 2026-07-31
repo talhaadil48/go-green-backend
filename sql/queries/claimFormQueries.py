@@ -8,7 +8,7 @@ from decimal import Decimal
 import inspect
 from fastapi import HTTPException
 import json
-from datetime import datetime,date
+from datetime import datetime,date,timedelta
 
 def parse_date(d):
     if d and isinstance(d, str) and d.strip():  # non-empty string
@@ -4037,65 +4037,64 @@ class ClaimFormQueries:
 
     # Add this ONE function to your Queries class
 
-    def broadcast_due_followups(self, sender_id: int = 23) -> Dict:
+    def broadcast_due_followups(self, sender_id: int = 1) -> Dict:
         """
         Check all claims for follow-ups due today and broadcast them.
         Run this once a day via cron job.
         """
         try:
-            # Get all claims with updates
-            query = """
-                SELECT claim_id, updates
-                FROM claims
-                WHERE recently_deleted = false
-                AND jsonb_array_length(updates) > 0
-            """
-            
             with self.conn.cursor() as cur:
+                # Get all claims with updates
+                query = """
+                    SELECT claim_id, updates
+                    FROM claims
+                    WHERE recently_deleted = false
+                    AND jsonb_array_length(updates) > 0
+                """
                 cur.execute(query)
                 results = cur.fetchall()
-            
-            today = datetime.now().date()
-            broadcasted_count = 0
-            
-            for row in results:
-                claim_id = row[0]
-                updates = row[1]
                 
-                for update in updates:
-                    # Check if it's a followup with followUpDays
-                    if (update.get('type') == 'followup' and 
-                        update.get('followUpDays') is not None):
-                        
-                        # Calculate follow-up date
-                        update_date = datetime.fromisoformat(update['date']).date()
-                        follow_up_date = update_date + timedelta(days=update['followUpDays'])
-                        
-                        # If due today, broadcast
-                        if follow_up_date == today:
-                            title = f"Follow-up due for Claim {claim_id}"
-                            message = update.get('message', 'No message provided')
+                today = datetime.now().date()
+                broadcasted_count = 0
+                
+                for row in results:
+                    claim_id = row[0]
+                    updates = row[1]
+                    
+                    for update in updates:
+                        # Check if it's a followup with followUpDays
+                        if (update.get('type') == 'followup' and 
+                            update.get('followUpDays') is not None):
                             
-                            # Insert notification
-                            notif_query = """
-                                INSERT INTO notifications (created_by, title, message, type)
-                                VALUES (%s, %s, %s, %s)
-                                RETURNING id
-                            """
-                            cur.execute(notif_query, (sender_id, title, message, 'followup'))
-                            notification_id = cur.fetchone()[0]
+                            # Calculate follow-up date
+                            update_date = datetime.fromisoformat(update['date']).date()
+                            follow_up_date = update_date + timedelta(days=update['followUpDays'])
                             
-                            # Link to all users
-                            mapping_query = """
-                                INSERT INTO user_notifications (notification_id, user_id, is_read)
-                                SELECT %s, id, CASE WHEN id = %s THEN TRUE ELSE FALSE END
-                                FROM users
-                            """
-                            cur.execute(mapping_query, (notification_id, sender_id))
-                            
-                            broadcasted_count += 1
-            
-            self.conn.commit()
+                            # If due today, broadcast
+                            if follow_up_date == today:
+                                title = f"Follow-up due for Claim {claim_id}"
+                                message = update.get('message', 'No message provided')
+                                
+                                # Insert notification
+                                notif_query = """
+                                    INSERT INTO notifications (created_by, title, message, type)
+                                    VALUES (%s, %s, %s, %s)
+                                    RETURNING id
+                                """
+                                cur.execute(notif_query, (sender_id, title, message, 'followup'))
+                                notification_id = cur.fetchone()[0]
+                                
+                                # Link to all users
+                                mapping_query = """
+                                    INSERT INTO user_notifications (notification_id, user_id, is_read)
+                                    SELECT %s, id, CASE WHEN id = %s THEN TRUE ELSE FALSE END
+                                    FROM users
+                                """
+                                cur.execute(mapping_query, (notification_id, sender_id))
+                                
+                                broadcasted_count += 1
+                
+                self.conn.commit()
             
             return {
                 'success': True,
