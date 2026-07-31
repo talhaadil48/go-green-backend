@@ -1667,8 +1667,13 @@ class ClaimFormQueries:
                 
                 # If invoice already exists and Hire Agreement is not present,
                 # do NOT update anything.
-                if invoice_exists and (not docs or "Hire Agreement" not in docs):
-                    print(f"Invoice already exists for claim_id {claim_id} and no Hire Agreement present. Skipping update.")
+                if invoice_exists and (
+                    not docs or
+                    not any(doc.startswith("Hire Agreement") for doc in docs)
+                ):
+                    print(
+                        f"Invoice already exists for claim_id {claim_id} and no Hire Agreement present. Skipping update."
+                    )
                     return existing_invoice[0]
 
                 # 1. Prepare data
@@ -1721,9 +1726,8 @@ class ClaimFormQueries:
                     row = cur.fetchone()
 
                 invoice_id = row[0]
-
-                # If Hire Agreement is present, update claim status
-                if docs and "Hire Agreement" in docs:
+                # If any Hire Agreement document is present, update claim status
+                if docs and any(doc.startswith("Hire Agreement") for doc in docs):
                     self.update_claim_status(claim_id, "invoice sent")
 
                 # Log claim change only for updates
