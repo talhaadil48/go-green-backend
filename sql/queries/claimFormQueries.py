@@ -3554,6 +3554,7 @@ class ClaimFormQueries:
         except Exception as e:
             print(f"Error refreshing materialized view: {e}")
             self.conn.rollback()
+
     def add_update(self, claim_id: str, new_update: dict, user_id: int) -> bool:
         query = """
             UPDATE claims
@@ -3566,12 +3567,15 @@ class ClaimFormQueries:
 
             # 👉 extract message safely
             message = new_update.get("message", "New update added")
+            notification_type = new_update.get("type", "update")
 
-            self.broadcast_notification(
-                user_id,
-                claim_id,
-                message
-            )
+            if notification_type.lower() != "followup":
+                self.broadcast_notification(
+                    user_id,
+                    claim_id,
+                    message,
+                    notification_type,
+                )
 
             return cur.rowcount > 0
         
@@ -3617,33 +3621,43 @@ class ClaimFormQueries:
         
 
 
-    def broadcast_notification(self, sender_id: int, title: str, message: str) -> bool:
+    def broadcast_notification(
+    self,
+    sender_id: int,
+    title: str,
+    message: str,
+    notification_type: str,
+) -> bool:
         try:
             # 1. Insert the notification and record WHO created it
             notif_query = """
-                INSERT INTO notifications (created_by, title, message)
-                VALUES (%s, %s, %s) RETURNING id
+                INSERT INTO notifications (created_by, title, message, type)
+                VALUES (%s, %s, %s, %s)
+                RETURNING id
             """
             with self.conn.cursor() as cur:
-                cur.execute(notif_query, (sender_id, title, message))
+                cur.execute(
+                    notif_query,
+                    (sender_id, title, message, notification_type),
+                )
                 notification_id = cur.fetchone()[0]
 
-            # 2. Link to ALL users. 
-            # If the user is the sender, automatically mark is_read = TRUE so it doesn't notify them.
+            # 2. Link to ALL users.
+            # If the user is the sender, automatically mark is_read = TRUE.
             mapping_query = """
                 INSERT INTO user_notifications (notification_id, user_id, is_read)
-                SELECT %s, id, CASE WHEN id = %s THEN TRUE ELSE FALSE END 
+                SELECT %s, id, CASE WHEN id = %s THEN TRUE ELSE FALSE END
                 FROM users
             """
             with self.conn.cursor() as cur:
                 cur.execute(mapping_query, (notification_id, sender_id))
-                
+
             self.conn.commit()
             return True
+
         except Exception as e:
             self.conn.rollback()
             raise e
-        
     def get_user_notifications(self, user_id: int, unread_only: bool = False):
         try:
             query = """
@@ -3652,6 +3666,7 @@ class ClaimFormQueries:
                     n.title,
                     n.message,
                     n.created_at,
+                    n.type,
                     un.is_read,
                     un.is_cleared,
                     u.username AS created_by
@@ -3676,6 +3691,7 @@ class ClaimFormQueries:
             self.conn.rollback()
             print("get_user_notifications ERROR:", e)
             raise e
+        
     def mark_single_as_read(self, notification_id: int, user_id: int) -> bool:
         try:
             query = """
@@ -4017,3 +4033,76 @@ class ClaimFormQueries:
             self.conn.rollback()
             print(f"Error creating offer: {e}")
             return False
+
+
+    # Add this ONE function to your Queries class
+
+    def broadcast_due_followups(self, sender_id: int = 23) -> Dict:
+        """
+        Check all claims for follow-ups due today and broadcast them.
+        Run this once a day via cron job.
+        """
+        try:
+            # Get all claims with updates
+            query = """
+                SELECT claim_id, updates
+                FROM claims
+                WHERE recently_deleted = false
+                AND jsonb_array_length(updates) > 0
+            """
+            
+            with self.conn.cursor() as cur:
+                cur.execute(query)
+                results = cur.fetchall()
+            
+            today = datetime.now().date()
+            broadcasted_count = 0
+            
+            for row in results:
+                claim_id = row[0]
+                updates = row[1]
+                
+                for update in updates:
+                    # Check if it's a followup with followUpDays
+                    if (update.get('type') == 'followup' and 
+                        update.get('followUpDays') is not None):
+                        
+                        # Calculate follow-up date
+                        update_date = datetime.fromisoformat(update['date']).date()
+                        follow_up_date = update_date + timedelta(days=update['followUpDays'])
+                        
+                        # If due today, broadcast
+                        if follow_up_date == today:
+                            title = f"Follow-up due for Claim {claim_id}"
+                            message = update.get('message', 'No message provided')
+                            
+                            # Insert notification
+                            notif_query = """
+                                INSERT INTO notifications (created_by, title, message, type)
+                                VALUES (%s, %s, %s, %s)
+                                RETURNING id
+                            """
+                            cur.execute(notif_query, (sender_id, title, message, 'followup'))
+                            notification_id = cur.fetchone()[0]
+                            
+                            # Link to all users
+                            mapping_query = """
+                                INSERT INTO user_notifications (notification_id, user_id, is_read)
+                                SELECT %s, id, CASE WHEN id = %s THEN TRUE ELSE FALSE END
+                                FROM users
+                            """
+                            cur.execute(mapping_query, (notification_id, sender_id))
+                            
+                            broadcasted_count += 1
+            
+            self.conn.commit()
+            
+            return {
+                'success': True,
+                'broadcasted': broadcasted_count,
+                'message': f'Successfully broadcasted {broadcasted_count} follow-ups'
+            }
+            
+        except Exception as e:
+            self.conn.rollback()
+            raise e

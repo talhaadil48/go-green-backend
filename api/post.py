@@ -578,3 +578,21 @@ async def get_cars_due_for_service(threshold: int = 8000):
             "success": False,
             "error": str(e)
         }
+
+
+
+@router.post("/notifications/broadcast-followups")
+async def broadcast_due_followups():
+    """
+    Broadcast all follow-ups due today. Run this once daily via cron job.
+    """
+    conn = DBConnection.get_connection()
+    queries = Queries(conn)
+    try:
+        result = queries.broadcast_due_followups(sender_id=23)
+        return result
+    except Exception as e:
+        conn.rollback()
+        raise HTTPException(status_code=500, detail=str(e))
+    finally:
+        conn.close()
