@@ -300,6 +300,27 @@ async def get_rental_agreements_by_claim(claim_id: str) -> Dict[str, Any]:
         )
 
 
+@router.delete("/claims/{claim_id}/rental-agreements/{rental_agreement_id}")
+async def delete_rental_agreement(
+    claim_id: str,
+    rental_agreement_id: int
+) -> Dict[str, Any]:
+    conn = DBConnection.get_connection()
+    queries = Queries(conn)
+
+    deleted = queries.delete_rental_agreement(
+        claim_id,
+        rental_agreement_id
+    )
+
+    if not deleted:
+        raise HTTPException(
+            status_code=404,
+            detail="Rental agreement not found"
+        )
+
+    return {"message": "Rental agreement deleted successfully"}
+
 
 @router.get("/claims/{claim_id}/rental-agreements/{rental_agreement_id}")
 async def get_rental_agreement(

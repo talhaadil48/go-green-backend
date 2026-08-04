@@ -1316,7 +1316,29 @@ class ClaimFormQueries:
         return None
 
     
-    
+    def delete_rental_agreement(
+    self,
+    claim_id: str,
+    rental_agreement_id: int
+) -> bool:
+
+        query = """
+            DELETE FROM rental_agreements
+            WHERE claim_id = %s
+            AND rental_agreement_id = %s;
+        """
+
+        with self.conn.cursor() as cur:
+            cur.execute(
+                query,
+                (claim_id, rental_agreement_id)
+            )
+
+            self.conn.commit()
+
+            return cur.rowcount > 0
+
+
     def get_all_claims(self) -> list[dict]:
         query = """
         WITH rental_agreements_filtered AS (
