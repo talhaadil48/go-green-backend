@@ -1142,6 +1142,8 @@ class ClaimFormQueries:
             self.conn.rollback()
             return False
 
+            
+
     def create_user(self, username: str, password: str, role: str) -> dict | None:
         query = """
             INSERT INTO users (username, password, role)
