@@ -2082,7 +2082,9 @@ class ClaimFormQueries:
         service_time,
         attributes=None,
         mot_date=None,
+        road_tax=None,
         current_miles=None,
+        last_service_miles=None,
         ownership=None,
         ownership_amount=None,
     ) -> bool:
@@ -2095,7 +2097,9 @@ class ClaimFormQueries:
                     service_time = COALESCE(%s, service_time),
                     attributes = COALESCE(%s, attributes),
                     mot_date = COALESCE(%s, mot_date),
+                    road_tax = COALESCE(%s, road_tax),
                     current_miles = COALESCE(%s, current_miles),
+                    last_service_miles = COALESCE(%s, last_service_miles),
                     ownership = COALESCE(%s, ownership),
                     ownership_amount = COALESCE(%s, ownership_amount)
                 WHERE id = %s
@@ -2110,7 +2114,9 @@ class ClaimFormQueries:
                         service_time,
                         attributes,
                         mot_date,
+                        road_tax,
                         current_miles,
+                        last_service_miles,
                         ownership,
                         ownership_amount,
                         car_id,
@@ -2147,13 +2153,7 @@ class ClaimFormQueries:
                     CASE 
                         WHEN c.is_long_hire THEN cl.long_claim_id
                         ELSE ra.claim_id
-                    END AS current_holder_claim_id,
-                    
-                    -- Conditionally pull the long claim miles so we can process it in Python
-                    cl.miles AS long_claim_miles,
-                    
-                    -- Standard fleet history miles for normal hires
-                    fh.miles_list
+                    END AS current_holder_claim_id
                     
                 FROM cars c
 
@@ -2177,16 +2177,9 @@ class ClaimFormQueries:
                     LIMIT 1
                 ) ra ON c.is_long_hire = false
 
-                -- NORMAL HIRE: Get all miles from fleet_history
-                LEFT JOIN LATERAL (
-                    SELECT ARRAY_AGG(f.miles_in) AS miles_list
-                    FROM fleet_history f
-                    WHERE f.car_reg = c.reg_no
-                ) fh ON c.is_long_hire = false
-
                 -- LONG HIRE: Get latest claimant record
                 LEFT JOIN LATERAL (
-                    SELECT clm.long_claim_id, clm.miles
+                    SELECT clm.long_claim_id
                     FROM claimant clm
                     WHERE clm.car_id = c.id
                     ORDER BY clm.start_date DESC NULLS LAST, clm.id DESC
@@ -2196,36 +2189,8 @@ class ClaimFormQueries:
                 ORDER BY c.id ASC
             """)
 
-            cars = cur.fetchall()
+            return cur.fetchall()
 
-        # process in python
-        for car in cars:
-            if car.get("is_long_hire"):
-                # If it's a long hire, directly use the miles from the latest claimant entry
-                try:
-                    miles = car.get("long_claim_miles")
-                    car["last_miles_in"] = int(float(miles)) if miles is not None else None
-                except (ValueError, TypeError):
-                    car["last_miles_in"] = None
-            else:
-                # If it's a standard hire, parse the fleet_history array
-                miles_list = car.get("miles_list") or []
-                valid_miles = []
-
-                for m in miles_list:
-                    try:
-                        if m is not None and str(m).replace('.', '', 1).isdigit():
-                            valid_miles.append(int(float(m)))
-                    except:
-                        pass
-
-                car["last_miles_in"] = max(valid_miles) if valid_miles else None
-
-            # Clean up the extra keys so they don't leak into your API response (optional)
-            car.pop("long_claim_miles", None)
-            car.pop("miles_list", None)
-
-        return cars
     def get_free_cars(self):
         query = "SELECT * FROM cars WHERE is_long_hire = FALSE ORDER BY id ASC"
         with self.conn.cursor(cursor_factory=RealDictCursor) as cur:
@@ -2235,76 +2200,14 @@ class ClaimFormQueries:
 
     def sync_last_service_miles(self, car_id: int):
         with self.conn.cursor(cursor_factory=RealDictCursor) as cur:
-            # 1. Fetch the car details, its current_miles, and historical miles
-            cur.execute("""
-                SELECT 
-                    c.id, c.reg_no, c.is_long_hire, c.current_miles,
-                    cl.miles AS long_claim_miles,
-                    fh.miles_list
-                FROM cars c
-                LEFT JOIN LATERAL (
-                    SELECT ARRAY_AGG(f.miles_in) AS miles_list
-                    FROM fleet_history f
-                    WHERE f.car_reg = c.reg_no
-                ) fh ON c.is_long_hire = false
-                LEFT JOIN LATERAL (
-                    SELECT clm.miles
-                    FROM claimant clm
-                    WHERE clm.car_id = c.id
-                    ORDER BY clm.start_date DESC NULLS LAST, clm.id DESC
-                    LIMIT 1
-                ) cl ON c.is_long_hire = true
-                WHERE c.id = %s
-            """, (car_id,))
-            
-            car = cur.fetchone()
-            if not car:
-                return None
-                
-            # 2. Extract historical miles (matching your get_all_cars logic)
-            historical_miles = 0
-            if car.get("is_long_hire"):
-                try:
-                    miles = car.get("long_claim_miles")
-                    historical_miles = int(float(miles)) if miles is not None else 0
-                except (ValueError, TypeError):
-                    historical_miles = 0
-            else:
-                miles_list = car.get("miles_list") or []
-                valid_miles = []
-                for m in miles_list:
-                    try:
-                        if m is not None and str(m).replace('.', '', 1).isdigit():
-                            valid_miles.append(int(float(m)))
-                    except:
-                        pass
-                historical_miles = max(valid_miles) if valid_miles else 0
-
-            # 3. Extract current_miles from the cars table
-            try:
-                current_miles_val = car.get("current_miles")
-                current_miles = int(float(current_miles_val)) if current_miles_val is not None else 0
-            except (ValueError, TypeError):
-                current_miles = 0
-            
-            # 4. Get the bigger value between historical and current
-            max_miles = max(current_miles, historical_miles)
-
-            # 5. Update last_service_miles and return the updated row
             cur.execute("""
                 UPDATE cars 
-                SET last_service_miles = %s 
+                SET last_service_miles = COALESCE(current_miles, 0)
                 WHERE id = %s 
                 RETURNING *
-            """, (max_miles, car_id))
+            """, (car_id,))
             
-            updated_car = cur.fetchone()
-            
-            # Clean up nested lists from the return dict just in case
-            updated_car.pop("long_claim_miles", None)
-            updated_car.pop("miles_list", None)
-            
-            return updated_car    
+            return cur.fetchone()    
     def get_non_long_hire_cars_count(self):
         with self.conn.cursor() as cur:
             cur.execute("""
@@ -3837,74 +3740,18 @@ class ClaimFormQueries:
         with self.conn.cursor(cursor_factory=RealDictCursor) as cur:
             cur.execute("""
                 SELECT 
-                    c.id, c.reg_no, c.is_long_hire, c.current_miles, c.last_service_miles,
-                    cl.miles AS long_claim_miles,
-                    fh.miles_list
-                FROM cars c
-                LEFT JOIN LATERAL (
-                    SELECT ARRAY_AGG(f.miles_in) AS miles_list
-                    FROM fleet_history f
-                    WHERE f.car_reg = c.reg_no
-                ) fh ON c.is_long_hire = false
-                LEFT JOIN LATERAL (
-                    SELECT clm.miles
-                    FROM claimant clm
-                    WHERE clm.car_id = c.id
-                    ORDER BY clm.start_date DESC NULLS LAST, clm.id DESC
-                    LIMIT 1
-                ) cl ON c.is_long_hire = true
-            """)
-            cars = cur.fetchall()
-
-        due_cars = []
-        for car in cars:
-            # 1. Calculate historical miles_in
-            historical_miles = 0
-            if car.get("is_long_hire"):
-                try:
-                    miles = car.get("long_claim_miles")
-                    historical_miles = int(float(miles)) if miles is not None else 0
-                except (ValueError, TypeError):
-                    historical_miles = 0
-            else:
-                miles_list = car.get("miles_list") or []
-                valid_miles = []
-                for m in miles_list:
-                    try:
-                        if m is not None and str(m).replace('.', '', 1).isdigit():
-                            valid_miles.append(int(float(m)))
-                    except:
-                        pass
-                historical_miles = max(valid_miles) if valid_miles else 0
-
-            # 2. Get current_miles from table
-            try:
-                cm_val = car.get("current_miles")
-                current_miles = int(float(cm_val)) if cm_val is not None else 0
-            except (ValueError, TypeError):
-                current_miles = 0
-
-            # 3. Get last_service_miles
-            try:
-                lsm_val = car.get("last_service_miles")
-                last_service_miles = int(float(lsm_val)) if lsm_val is not None else 0
-            except (ValueError, TypeError):
-                last_service_miles = 0
-
-            # 4. Math: max of (current, historical) - last_service
-            max_miles = max(current_miles, historical_miles)
-            miles_since_service = max_miles - last_service_miles
-
-            # 5. Check against threshold
-            if miles_since_service > threshold:
-                due_cars.append({
-                    "reg_no": car["reg_no"],
-                    "miles_since_service": miles_since_service,
-                    "max_miles": max_miles,
-                    "last_service_miles": last_service_miles
-                })
-
-        return due_cars
+                    id,
+                    reg_no,
+                    is_long_hire,
+                    COALESCE(current_miles, 0) AS current_miles,
+                    COALESCE(current_miles, 0) AS max_miles,
+                    COALESCE(last_service_miles, 0) AS last_service_miles,
+                    (COALESCE(current_miles, 0) - COALESCE(last_service_miles, 0)) AS miles_since_service
+                FROM cars
+                WHERE (COALESCE(current_miles, 0) - COALESCE(last_service_miles, 0)) > %s
+                ORDER BY id ASC
+            """, (threshold,))
+            return cur.fetchall()
 
 
     def update_mot_doc(self, car_id: int, mot_doc: str) -> bool:

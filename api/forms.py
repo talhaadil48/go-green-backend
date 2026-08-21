@@ -967,7 +967,9 @@ class CarUpdate(BaseModel):
     service_time: Optional[str] = None
     attributes: Optional[List[str]] = None
     mot_date: Optional[str] = None
+    road_tax: Optional[str] = None
     current_miles: Optional[int] = None
+    last_service_miles: Optional[int] = None
     ownership: Optional[str] = None
     ownership_amount: Optional[float] = None
 
@@ -984,7 +986,9 @@ async def update_car(car_id: int, payload: CarUpdate):
                 payload.service_time,
                 payload.attributes,
                 payload.mot_date,
+                payload.road_tax,
                 payload.current_miles,
+                payload.last_service_miles,
                 payload.ownership,
                 payload.ownership_amount,
             )
