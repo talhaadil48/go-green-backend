@@ -2074,55 +2074,33 @@ class ClaimFormQueries:
             raise e
 
 
-    def update_car(
-        self,
-        car_id,
-        model,
-        name,
-        service_time,
-        attributes=None,
-        mot_date=None,
-        road_tax=None,
-        current_miles=None,
-        last_service_miles=None,
-        ownership=None,
-        ownership_amount=None,
-    ) -> bool:
+    def update_car(self, car_id: int, data: dict) -> bool:
+        if not data:
+            return True
+
+        allowed_columns = {
+            "model", "name", "service_time", "attributes", "mot_date",
+            "road_tax", "current_miles", "last_service_miles", "ownership",
+            "ownership_amount", "last_miles_in"
+        }
+
+        fields_to_update = {k: v for k, v in data.items() if k in allowed_columns}
+        if not fields_to_update:
+            return True
+
+        set_clauses = [f"{col} = %s" for col in fields_to_update.keys()]
+        values = list(fields_to_update.values())
+        values.append(car_id)
+
         try:
-            query = """
+            query = f"""
                 UPDATE cars
-                SET
-                    model = COALESCE(%s, model),
-                    name = COALESCE(%s, name),
-                    service_time = COALESCE(%s, service_time),
-                    attributes = COALESCE(%s, attributes),
-                    mot_date = COALESCE(%s, mot_date),
-                    road_tax = COALESCE(%s, road_tax),
-                    current_miles = COALESCE(%s, current_miles),
-                    last_service_miles = COALESCE(%s, last_service_miles),
-                    ownership = COALESCE(%s, ownership),
-                    ownership_amount = COALESCE(%s, ownership_amount)
+                SET {', '.join(set_clauses)}
                 WHERE id = %s
             """
 
             with self.conn.cursor() as cur:
-                cur.execute(
-                    query,
-                    (
-                        model,
-                        name,
-                        service_time,
-                        attributes,
-                        mot_date,
-                        road_tax,
-                        current_miles,
-                        last_service_miles,
-                        ownership,
-                        ownership_amount,
-                        car_id,
-                    )
-                )
-
+                cur.execute(query, tuple(values))
                 updated = cur.rowcount
 
             self.conn.commit()

@@ -970,6 +970,7 @@ class CarUpdate(BaseModel):
     road_tax: Optional[str] = None
     current_miles: Optional[int] = None
     last_service_miles: Optional[int] = None
+    last_miles_in: Optional[int] = None
     ownership: Optional[str] = None
     ownership_amount: Optional[float] = None
 
@@ -978,20 +979,10 @@ async def update_car(car_id: int, payload: CarUpdate):
     conn = DBConnection.get_connection()
     queries = Queries(conn)
 
+    update_data = payload.model_dump(exclude_unset=True) if hasattr(payload, "model_dump") else payload.dict(exclude_unset=True)
+
     try:
-        updated = queries.update_car(
-                car_id,
-                payload.model,
-                payload.name,
-                payload.service_time,
-                payload.attributes,
-                payload.mot_date,
-                payload.road_tax,
-                payload.current_miles,
-                payload.last_service_miles,
-                payload.ownership,
-                payload.ownership_amount,
-            )
+        updated = queries.update_car(car_id, update_data)
     except Exception as e:
         conn.rollback()
         raise HTTPException(status_code=400, detail=str(e))
