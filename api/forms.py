@@ -188,11 +188,36 @@ async def get_pre_inspection_form(claim_id: str) -> list[Dict[str, Any]]:
     return response_list
 
 @router.get("/cancellation-forms/{claim_id}")
-async def get_cancellation_form(claim_id: str) -> Dict[str, Any]:
+async def get_cancellation_form(
+    claim_id: str,
+    vehicle_reg: Optional[str] = Query(None, description="Filter by vehicle registration")
+) -> Dict[str, Any] | list[Dict[str, Any]]:
+    """Get cancellation form(s) for a claim.
+    - Without vehicle_reg: returns the claim-level form (backward compatible)
+    - With vehicle_reg: returns per-car form, falls back to claim-level
+    - With vehicle_reg="all": returns all cancellation forms for the claim
+    """
     conn = DBConnection.get_connection()
     queries = Queries(conn)
     
-    result = queries.get_cancellation_form(claim_id)
+    if vehicle_reg == "all":
+        results = queries.get_all_cancellation_forms(claim_id)
+        return [
+            {
+                "user_name": r.get("user_name", ""),
+                "name": r.get("name", ""),
+                "address": r.get("address", ""),
+                "postcode": r.get("postcode", ""),
+                "email": r.get("email", ""),
+                "cancellation_date": r.get("cancellation_date", ""),
+                "cancellation_signature": r.get("cancellation_signature"),
+                "claim_id": r["claim_id"],
+                "vehicle_reg": r.get("vehicle_reg")
+            }
+            for r in results
+        ]
+    
+    result = queries.get_cancellation_form(claim_id, vehicle_reg)
     if not result:
         raise HTTPException(status_code=404, detail="Cancellation form not found")
     
@@ -204,7 +229,8 @@ async def get_cancellation_form(claim_id: str) -> Dict[str, Any]:
         "email": result.get("email", ""),
         "cancellation_date": result.get("cancellation_date", ""),
         "cancellation_signature": result.get("cancellation_signature"),
-        "claim_id": result["claim_id"]
+        "claim_id": result["claim_id"],
+        "vehicle_reg": result.get("vehicle_reg")
     }
 
 @router.get("/storage-forms/{claim_id}")

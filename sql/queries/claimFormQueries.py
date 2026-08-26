@@ -234,12 +234,16 @@ class ClaimFormQueries:
     def upsert_cancellation_form(self, claim_id: str, data: dict) -> dict | None:
         updatable_columns = [
             "name", "address", "postcode", "email",
-            "cancellation_date", "cancellation_signature"
+            "cancellation_date", "cancellation_signature",
+            "vehicle_reg"
         ]
 
         fields_to_update = [col for col in updatable_columns if col in data]
         if not fields_to_update:
             return None
+
+        # Extract vehicle_reg for per-car lookup (NULL = claim-level)
+        vehicle_reg = data.get("vehicle_reg")
 
         changed_fields = []
         user_name = data.get("user_name", "Unknown")
@@ -247,8 +251,17 @@ class ClaimFormQueries:
 
         try:
             with self.conn.cursor() as cur:
-                # 1. Check if entry already exists
-                cur.execute("SELECT * FROM cancellation_forms WHERE claim_id = %(claim_id)s", {"claim_id": claim_id})
+                # 1. Check if entry already exists (per-car or claim-level)
+                if vehicle_reg:
+                    cur.execute(
+                        "SELECT * FROM cancellation_forms WHERE claim_id = %(claim_id)s AND vehicle_reg = %(vehicle_reg)s",
+                        {"claim_id": claim_id, "vehicle_reg": vehicle_reg}
+                    )
+                else:
+                    cur.execute(
+                        "SELECT * FROM cancellation_forms WHERE claim_id = %(claim_id)s AND vehicle_reg IS NULL",
+                        {"claim_id": claim_id}
+                    )
                 old_row = cur.fetchone()
                 record_exists = old_row is not None
 
@@ -272,16 +285,22 @@ class ClaimFormQueries:
                     changed_fields = [col for col in fields_to_update if data.get(col) is not None and data.get(col) != "" and data.get(col) != 'No' and data.get(col) != [] and data.get(col) != False]
 
                 params = {"claim_id": claim_id, **{k: data[k] for k in fields_to_update}}
+                if vehicle_reg:
+                    params["vehicle_reg"] = vehicle_reg
 
                 if record_exists:
                     # 2a. UPDATE existing entry
                     if not changed_fields:
                         return old_dict
                     set_clause = ", ".join(f"{col} = %({col})s" for col in fields_to_update)
+                    if vehicle_reg:
+                        where_clause = "claim_id = %(claim_id)s AND vehicle_reg = %(vehicle_reg)s"
+                    else:
+                        where_clause = "claim_id = %(claim_id)s AND vehicle_reg IS NULL"
                     query = f"""
                         UPDATE cancellation_forms 
                         SET {set_clause}
-                        WHERE claim_id = %(claim_id)s
+                        WHERE {where_clause}
                         RETURNING *;
                     """
                 else:
@@ -1237,15 +1256,48 @@ class ClaimFormQueries:
                 columns = [desc[0] for desc in cur.description]
                 return dict(zip(columns, row))
         return None
-    def get_cancellation_form(self, claim_id: str) -> dict | None:
-        query = "SELECT * FROM cancellation_forms WHERE claim_id = %s;"
+    def get_cancellation_form(self, claim_id: str, vehicle_reg: str = None) -> dict | None:
+        """Get cancellation form. If vehicle_reg is provided, get per-car form.
+        Falls back to claim-level form (vehicle_reg IS NULL) if per-car not found."""
+        if vehicle_reg:
+            # Try per-car form first
+            query = "SELECT * FROM cancellation_forms WHERE claim_id = %s AND vehicle_reg = %s;"
+            with self.conn.cursor() as cur:
+                cur.execute(query, (claim_id, vehicle_reg))
+                row = cur.fetchone()
+                if row:
+                    columns = [desc[0] for desc in cur.description]
+                    return dict(zip(columns, row))
+            # Fall back to claim-level form
+            query = "SELECT * FROM cancellation_forms WHERE claim_id = %s AND vehicle_reg IS NULL;"
+            with self.conn.cursor() as cur:
+                cur.execute(query, (claim_id,))
+                row = cur.fetchone()
+                if row:
+                    columns = [desc[0] for desc in cur.description]
+                    return dict(zip(columns, row))
+            return None
+        else:
+            # Original behavior: get claim-level form
+            query = "SELECT * FROM cancellation_forms WHERE claim_id = %s AND vehicle_reg IS NULL;"
+            with self.conn.cursor() as cur:
+                cur.execute(query, (claim_id,))
+                row = cur.fetchone()
+                if row:
+                    columns = [desc[0] for desc in cur.description]
+                    return dict(zip(columns, row))
+        return None
+
+    def get_all_cancellation_forms(self, claim_id: str) -> list:
+        """Get all cancellation forms for a claim (per-car + claim-level)."""
+        query = "SELECT * FROM cancellation_forms WHERE claim_id = %s ORDER BY vehicle_reg NULLS LAST;"
         with self.conn.cursor() as cur:
             cur.execute(query, (claim_id,))
-            row = cur.fetchone()
-            if row:
+            rows = cur.fetchall()
+            if rows:
                 columns = [desc[0] for desc in cur.description]
-                return dict(zip(columns, row))
-        return None
+                return [dict(zip(columns, row)) for row in rows]
+        return []
 
     def get_storage_form(self, claim_id: str) -> dict | None:
         query = "SELECT * FROM storage_forms WHERE claim_id = %s;"

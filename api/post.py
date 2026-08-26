@@ -242,7 +242,8 @@ async def upsert_cancellation_form(request: Request) -> Dict[str, Any]:
         "email": result.get("email", ""),
         "cancellation_date": result.get("cancellation_date", ""),
         "cancellation_signature": result.get("cancellation_signature"),
-        "claim_id": result["claim_id"]
+        "claim_id": result["claim_id"],
+        "vehicle_reg": result.get("vehicle_reg")
     }
 
     return response
