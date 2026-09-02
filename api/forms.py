@@ -2254,19 +2254,15 @@ async def get_offers():
     }
 
 
+class OfferEntry(BaseModel):
+    amount: float | None = None
+    date: str | None = None
+    status: str | None = None
+
+
 class OfferUpdate(BaseModel):
-    offer1: float | None = None
-    offer1_date: str | None = None
-    offer1_status: str | None = None
-
-    offer2: float | None = None
-    offer2_date: str | None = None
-    offer2_status: str | None = None
-
-    offer3: float | None = None
-    offer3_date: str | None = None
-    offer3_status: str | None = None
-
+    offer_index: int
+    offer: OfferEntry
     status: str | None = None
 
 
@@ -2275,7 +2271,12 @@ async def update_offer(claim_id: str, data: OfferUpdate):
     conn = DBConnection.get_connection()
     queries = Queries(conn)
 
-    update_data = {k: v for k, v in data.dict().items() if v is not None}
+    update_data = {
+        "offer_index": data.offer_index,
+        "offer": data.offer.model_dump(),
+    }
+    if data.status is not None:
+        update_data["status"] = data.status
 
     success = queries.update_offer(claim_id, update_data)
 
@@ -2307,20 +2308,19 @@ async def search_claims():
 
 class OfferCreate(BaseModel):
     claim_id: str
-    offer1: float
-    offer1_date: str
-    offer1_status: str
+    offer: OfferEntry
+    seen: bool = False
     
 @router.post("/offers")
 async def create_offer(data: OfferCreate):
+    """Mark an offer as paid (from InvoiceManagment). Appends to the offers JSON array."""
     conn = DBConnection.get_connection()
     queries = Queries(conn)
 
     success = queries.create_offer(
         claim_id=data.claim_id,
-        offer1=data.offer1,
-        offer1_date=data.offer1_date,
-        offer1_status=data.offer1_status
+        offer=data.offer.model_dump(),
+        seen=data.seen
     )
 
     if not success:

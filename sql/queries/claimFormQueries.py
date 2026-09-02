@@ -2030,30 +2030,20 @@ class ClaimFormQueries:
             ) hire ON TRUE
 
             -- =====================================
-            -- OFFER CALCULATIONS (Offer 3 only, then Offer 1)
+            -- OFFER CALCULATIONS (from offers JSONB array)
+            -- Uses the latest offer by date where status = 'paid'
             -- =====================================
             LEFT JOIN LATERAL (
                 SELECT
-                    -- Payment received: check Offer 3 first, then Offer 1
-                    CASE
-                        WHEN o.offer3_status = 'paid' THEN o.offer3
-                        WHEN o.offer1_status = 'paid' THEN o.offer1
-                        ELSE NULL
-                    END AS payment_received,
-
-                    -- Payment status: check Offer 3 first, then Offer 1
-                    (
-                        COALESCE(o.offer3_status, '') = 'paid'
-                        OR COALESCE(o.offer1_status, '') = 'paid'
-                    ) AS payment_status,
-
-                    -- Date received: check Offer 3 first, then Offer 1
-                    CASE
-                        WHEN o.offer3_status = 'paid' THEN o.offer3_date
-                        WHEN o.offer1_status = 'paid' THEN o.offer1_date
-                        ELSE NULL
-                    END AS date_received
-
+                    (elem->>'amount')::numeric AS payment_received,
+                    (elem->>'status' = 'paid') AS payment_status,
+                    elem->>'date' AS date_received
+                FROM jsonb_array_elements(COALESCE(o.offers, '[]'::jsonb)) AS elem
+                WHERE elem->>'status' = 'paid'
+                  AND elem->>'date' IS NOT NULL
+                  AND elem->>'date' != ''
+                ORDER BY (elem->>'date') DESC
+                LIMIT 1
             ) latest_offer ON TRUE
 
             WHERE c.recently_deleted = FALSE
@@ -3805,15 +3795,21 @@ class ClaimFormQueries:
 
 
     def create_blank_offer(self, claim_id: str) -> bool:
+        """Append an empty offer entry to the offers JSONB array for a claim.
+        If the claim has no offer row yet, create one with an empty array + the blank entry.
+        """
+        empty_offer = '{"amount": null, "date": null, "status": null}'
         query = """
-            INSERT INTO offer (claim_id)
-            VALUES (%s)
-            ON CONFLICT (claim_id) DO NOTHING;
+            INSERT INTO offer (claim_id, offers)
+            VALUES (%s, %s::jsonb)
+            ON CONFLICT (claim_id) DO UPDATE
+                SET offers = offer.offers || EXCLUDED.offers
         """
 
         try:
             with self.conn.cursor() as cur:
-                cur.execute(query, (claim_id,))
+                # Wrap in a JSON array so we can || concatenate
+                cur.execute(query, (claim_id, f'[{empty_offer}]'))
                 self.conn.commit()
                 return cur.rowcount > 0
         except Exception as e:
@@ -3826,12 +3822,36 @@ class ClaimFormQueries:
     # OFFER - GET ALL (JOIN CLAIMS ONLY)
         # =========================
     def get_all_offers(self) -> list[dict]:
+        """
+        Return all offers with:
+          - offers: full JSONB array of offer entries
+          - latest_offer: the offer with the most recent date (computed server-side)
+          - status, seen, claim_type, claimant_name, hire_storage
+        """
         query = """
-            SELECT 
-                o.*,
+            SELECT
+                o.claim_id,
+                o.offers,
+                o.status,
+                o.seen,
                 c.claim_type,
                 c.claimant_name,
-                COALESCE(i.rent_bill, 0) + COALESCE(i.storage_bill, 0) AS hire_storage
+                COALESCE(i.rent_bill, 0) + COALESCE(i.storage_bill, 0) AS hire_storage,
+                -- Compute latest_offer from the JSONB array (most recent date)
+                CASE
+                    WHEN jsonb_array_length(o.offers) > 0 THEN (
+                        SELECT jsonb_build_object(
+                            'amount', (elem->>'amount')::numeric,
+                            'date',   elem->>'date',
+                            'status', elem->>'status'
+                        )
+                        FROM jsonb_array_elements(o.offers) AS elem
+                        WHERE elem->>'date' IS NOT NULL AND elem->>'date' != ''
+                        ORDER BY (elem->>'date') DESC
+                        LIMIT 1
+                    )
+                    ELSE NULL
+                END AS latest_offer
             FROM offer o
             LEFT JOIN claims c
                 ON c.claim_id = o.claim_id
@@ -3845,32 +3865,69 @@ class ClaimFormQueries:
             cur.execute(query)
             return cur.fetchall()
     # =========================
-    # OFFER - UPDATE (ANY FIELD)
+    # OFFER - UPDATE (JSONB array)
     # =========================
     def update_offer(self, claim_id: str, data: dict) -> bool:
-        if not data:
-            return False
-
-        fields = []
-        values = []
-
-        for key, value in data.items():
-            fields.append(f"{key} = %s")
-            values.append(value)
-
-        values.append(claim_id)
-
-        query = f"""
-            UPDATE offer
-            SET {", ".join(fields)}
-            WHERE claim_id = %s
         """
+        Update an offer in the JSONB array.
+        Expects data = {"offer_index": int, "offer": {"amount", "date", "status"}}.
+        If offer_index is out of bounds, appends as a new offer.
+        If amount/date are both null, removes the entry from the array.
+        Also supports updating the top-level `status` field.
+        """
+        offer_index = data.get("offer_index")
+        offer = data.get("offer")
+        top_status = data.get("status")
+
+        if offer_index is None or offer is None:
+            # Fallback: allow setting just the top-level status
+            if top_status is not None:
+                query = "UPDATE offer SET status = %s WHERE claim_id = %s"
+                try:
+                    with self.conn.cursor() as cur:
+                        cur.execute(query, (top_status, claim_id))
+                        self.conn.commit()
+                        return cur.rowcount > 0
+                except Exception as e:
+                    self.conn.rollback()
+                    print(f"Error updating offer status: {e}")
+                    return False
+            return False
 
         try:
             with self.conn.cursor() as cur:
-                cur.execute(query, values)
+                # Fetch current offers array
+                cur.execute("SELECT offers FROM offer WHERE claim_id = %s", (claim_id,))
+                row = cur.fetchone()
+                if not row:
+                    return False
+
+                offers = row[0] if row[0] else []
+
+                # If out of bounds, append
+                if offer_index >= len(offers):
+                    offers.append(offer)
+                else:
+                    # If both amount and date are null, remove the entry
+                    if offer.get("amount") is None and offer.get("date") is None:
+                        offers.pop(offer_index)
+                    else:
+                        offers[offer_index] = offer
+
+                # Build update
+                set_parts = ["offers = %s"]
+                params = [json.dumps(offers)]
+
+                if top_status is not None:
+                    set_parts.append("status = %s")
+                    params.append(top_status)
+
+                params.append(claim_id)
+                query = f"UPDATE offer SET {', '.join(set_parts)} WHERE claim_id = %s"
+                cur.execute(query, params)
                 self.conn.commit()
                 return cur.rowcount > 0
+
         except Exception as e:
             self.conn.rollback()
             print(f"Error updating offer: {e}")
@@ -3899,34 +3956,30 @@ class ClaimFormQueries:
     def create_offer(
     self,
     claim_id: str,
-    offer1: float,
-    offer1_date: str,
-    offer1_status: str
+    offer: dict,
+    seen: bool = False
 ) -> bool:
+        """
+        Append a new offer entry to the offers JSONB array.
+        If no offer row exists for the claim, create one.
+        
+        Args:
+            claim_id: The claim ID
+            offer: dict with keys 'amount', 'date', 'status'
+            seen: whether the offer has been seen (True for Offers page, False for Invoice page)
+        """
+        offer_json = json.dumps(offer)
         query = """
-            INSERT INTO offer (
-                claim_id,
-                offer1,
-                offer1_date,
-                offer1_status,
-                seen
-            )
-            VALUES (%s, %s, %s, %s, FALSE)
-            ON CONFLICT (claim_id) DO NOTHING;
+            INSERT INTO offer (claim_id, offers, seen)
+            VALUES (%s, %s::jsonb, %s)
+            ON CONFLICT (claim_id) DO UPDATE
+                SET offers = offer.offers || EXCLUDED.offers,
+                    seen = %s
         """
 
         try:
             with self.conn.cursor() as cur:
-                cur.execute(
-                    query,
-                    (
-                        claim_id,
-                        offer1,
-                        offer1_date,
-                        offer1_status
-                    )
-                )
-
+                cur.execute(query, (claim_id, f'[{offer_json}]', seen, seen))
                 self.conn.commit()
                 return cur.rowcount > 0
 
