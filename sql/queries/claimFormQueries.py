@@ -3857,7 +3857,6 @@ class ClaimFormQueries:
                 ON c.claim_id = o.claim_id
             LEFT JOIN invoice i
                 ON i.claim_id = o.claim_id
-            WHERE o.seen = TRUE
             ORDER BY o.claim_id DESC;
         """
 
