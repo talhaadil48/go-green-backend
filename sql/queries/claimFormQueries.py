@@ -679,6 +679,18 @@ class ClaimFormQueries:
             else:
                 print("Reached unexpected state")
 
+            # Automatically update car's current_miles from the latest hire miles
+            latest_val = miles_in_val if (miles_in_val is not None and str(miles_in_val).strip() != "") else miles_out_val
+            if reg and latest_val is not None and str(latest_val).strip() != "":
+                try:
+                    num_val = int(float(str(latest_val).strip()))
+                    with self.conn.cursor() as cur:
+                        cur.execute("UPDATE cars SET current_miles = %s WHERE UPPER(TRIM(reg_no)) = UPPER(TRIM(%s))", (num_val, reg))
+                    self.conn.commit()
+                    print(f"[AUTO-MILES] Updated car {reg} current_miles to {num_val}")
+                except Exception as ex:
+                    print(f"[AUTO-MILES] Error updating current_miles for {reg}: {ex}")
+
             print("handle_fleet_history() COMPLETE")
             print("=" * 80)
 
@@ -2167,7 +2179,23 @@ class ClaimFormQueries:
         with self.conn.cursor(cursor_factory=RealDictCursor) as cur:
             cur.execute("""
                 SELECT 
-                    c.*,
+                    c.id,
+                    c.model,
+                    c.name,
+                    c.reg_no,
+                    c.is_available,
+                    c.is_long_hire,
+                    c.service_time,
+                    c.last_service_miles,
+                    c.mot_date,
+                    c.mot_doc,
+                    c.road_tax,
+                    c.ownership,
+                    c.ownership_amount,
+                    c.attributes,
+                    
+                    -- Automatically get miles from latest claim (by date out), falling back to c.current_miles
+                    COALESCE(latest_miles.miles, c.current_miles) AS current_miles,
                     
                     -- Conditionally select current holder based on is_long_hire
                     CASE 
@@ -2176,6 +2204,46 @@ class ClaimFormQueries:
                     END AS current_holder_claim_id
                     
                 FROM cars c
+
+                -- LATEST MILES: Get mileage from the claim with the most recent date out
+                LEFT JOIN LATERAL (
+                    SELECT miles
+                    FROM (
+                        SELECT 
+                            fh.hire_start AS date_out,
+                            fh.id AS sort_id,
+                            COALESCE(
+                                NULLIF(REPLACE(TRIM(fh.miles_in::text), ',', ''), '')::numeric::integer,
+                                NULLIF(REPLACE(TRIM(fh.miles_out::text), ',', ''), '')::numeric::integer
+                            ) AS miles
+                        FROM fleet_history fh
+                        WHERE UPPER(TRIM(fh.car_reg)) = UPPER(TRIM(c.reg_no))
+                          AND (
+                              NULLIF(TRIM(fh.miles_in::text), '') IS NOT NULL
+                              OR NULLIF(TRIM(fh.miles_out::text), '') IS NOT NULL
+                          )
+
+                        UNION ALL
+
+                        SELECT 
+                            r.hire_vehicle_date_out::text AS date_out,
+                            r.rental_agreement_id AS sort_id,
+                            COALESCE(
+                                NULLIF(REPLACE(TRIM(r.hire_vehicle_miles_in::text), ',', ''), '')::numeric::integer,
+                                NULLIF(REPLACE(TRIM(r.hire_vehicle_miles_out::text), ',', ''), '')::numeric::integer
+                            ) AS miles
+                        FROM rental_agreements r
+                        WHERE UPPER(TRIM(r.hire_vehicle_reg)) = UPPER(TRIM(c.reg_no))
+                          AND r.hire_vehicle_date_out IS NOT NULL
+                          AND (
+                              NULLIF(TRIM(r.hire_vehicle_miles_in::text), '') IS NOT NULL
+                              OR NULLIF(TRIM(r.hire_vehicle_miles_out::text), '') IS NOT NULL
+                          )
+                    ) combined_hires
+                    WHERE miles IS NOT NULL
+                    ORDER BY date_out DESC NULLS LAST, sort_id DESC
+                    LIMIT 1
+                ) latest_miles ON true
 
                 -- NORMAL HIRE: Get the current holder from rental_agreements (smallest ID first)
                 LEFT JOIN LATERAL (

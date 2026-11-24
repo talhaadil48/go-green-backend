@@ -955,6 +955,12 @@ async def update_claim(
                 detail=f"Claim with id {claim_id} not found"
             )
 
+        # If pay_date is updated for a vehicle damage claim (Stage 3: Client Paid), automatically close the claim
+        if update_data.get("pay_date"):
+            claim_info = queries.get_claim_by_id(claim_id)
+            if claim_info and (claim_info.get("claim_type") or "").lower() == "vehicle damage":
+                queries.close_claim(claim_id, current_user.username or "System", "Vehicle damage claim settled/paid")
+
     except Exception as e:
         conn.rollback()
         raise HTTPException(status_code=500, detail=str(e))
@@ -1552,6 +1558,12 @@ async def update_claim_disputed_api(claim_id: str, payload: Dict[str, Any]):
         updated = queries.update_claim_disputed(claim_id, is_disputed, dispute_reason)
         if not updated:
             raise HTTPException(status_code=404, detail="claim_id not found")
+        
+        # If marked as disputed, automatically close the claim
+        if is_disputed:
+            queries.close_claim(claim_id, "System (Disputed)", dispute_reason or "Claim marked as disputed")
+        elif is_disputed is False:
+            queries.reopen_claim(claim_id)
     except Exception as e:
         conn.rollback()
         raise HTTPException(status_code=500, detail=str(e))
@@ -1936,6 +1948,12 @@ async def update_payment_details(claim_id: str, payment_update: PaymentUpdate):
 
     if not updated:
         raise HTTPException(status_code=404, detail="Claim not found")
+
+    # If pay_date is updated for a vehicle damage claim (Stage 3: Client Paid), automatically close the claim
+    if payment_update.pay_date:
+        claim_info = queries.get_claim_by_id(claim_id)
+        if claim_info and (claim_info.get("claim_type") or "").lower() == "vehicle damage":
+            queries.close_claim(claim_id, "System (Paid)", "Vehicle damage claim settled/paid")
 
     return {"message": "Payment details updated successfully"}
 
