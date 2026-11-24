@@ -2210,7 +2210,7 @@ class ClaimFormQueries:
                     SELECT miles
                     FROM (
                         SELECT 
-                            fh.hire_start AS date_out,
+                            fh.hire_start::date AS date_out,
                             fh.id AS sort_id,
                             COALESCE(
                                 NULLIF(REPLACE(TRIM(fh.miles_in::text), ',', ''), '')::numeric::integer,
@@ -2226,7 +2226,7 @@ class ClaimFormQueries:
                         UNION ALL
 
                         SELECT 
-                            r.hire_vehicle_date_out::text AS date_out,
+                            r.hire_vehicle_date_out::date AS date_out,
                             r.rental_agreement_id AS sort_id,
                             COALESCE(
                                 NULLIF(REPLACE(TRIM(r.hire_vehicle_miles_in::text), ',', ''), '')::numeric::integer,
