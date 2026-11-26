@@ -2134,6 +2134,66 @@ async def clear_all_notifications(user_id: int):
         "message": "All notifications cleared for user"
     }
 
+# ==================== FLEET ALERTS ENDPOINTS ====================
+
+@router.get("/fleet/alerts")
+async def get_fleet_alerts(user_id: int = Query(..., description="User ID"), force: bool = Query(False, description="Force 12-hour sync")):
+    conn = DBConnection.get_connection()
+    queries = Queries(conn)
+    try:
+        # Run 12-hour sync if elapsed or forced
+        queries.scan_and_sync_fleet_alerts(force=force)
+        # Fetch alerts with read status for this user
+        data = queries.get_user_fleet_alerts(user_id)
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+    return {
+        "success": True,
+        "data": data
+    }
+
+@router.patch("/fleet/alerts/{alert_id}/users/{user_id}/read")
+async def mark_single_fleet_alert_read(alert_id: int, user_id: int):
+    conn = DBConnection.get_connection()
+    queries = Queries(conn)
+    try:
+        queries.mark_single_fleet_alert_as_read(alert_id, user_id)
+    except Exception as e:
+        conn.rollback()
+        raise HTTPException(status_code=400, detail=str(e))
+    return {
+        "success": True,
+        "message": "Fleet alert marked as read"
+    }
+
+@router.patch("/fleet/alerts/users/{user_id}/read-all")
+async def mark_all_fleet_alerts_read(user_id: int):
+    conn = DBConnection.get_connection()
+    queries = Queries(conn)
+    try:
+        queries.mark_all_fleet_alerts_as_read(user_id)
+    except Exception as e:
+        conn.rollback()
+        raise HTTPException(status_code=400, detail=str(e))
+    return {
+        "success": True,
+        "message": f"All fleet alerts marked as read for user {user_id}"
+    }
+
+@router.post("/fleet/alerts/sync")
+async def force_fleet_alerts_sync():
+    conn = DBConnection.get_connection()
+    queries = Queries(conn)
+    try:
+        res = queries.scan_and_sync_fleet_alerts(force=True)
+    except Exception as e:
+        conn.rollback()
+        raise HTTPException(status_code=400, detail=str(e))
+    return {
+        "success": True,
+        "data": res
+    }
+
 @router.get("/claims/{claim_id}/history")
 async def get_claim_history(claim_id: str) -> list[Dict[str, Any]]:
     conn = DBConnection.get_connection()

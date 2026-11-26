@@ -2294,8 +2294,16 @@ class ClaimFormQueries:
                 WHERE id = %s 
                 RETURNING *
             """, (car_id,))
+            updated_car = cur.fetchone()
             
-            return cur.fetchone()    
+            # Auto-resolve any active service_due alert for this car
+            cur.execute("""
+                UPDATE fleet_alerts
+                SET status = 'resolved', resolved_at = CURRENT_TIMESTAMP
+                WHERE car_id = %s AND alert_type = 'service_due' AND status = 'active'
+            """, (car_id,))
+
+            return updated_car    
     def get_non_long_hire_cars_count(self):
         with self.conn.cursor() as cur:
             cur.execute("""
@@ -4123,6 +4131,229 @@ class ClaimFormQueries:
                 'message': f'Successfully broadcasted {broadcasted_count} follow-ups'
             }
             
+        except Exception as e:
+            self.conn.rollback()
+            raise e
+
+    def scan_and_sync_fleet_alerts(self, force: bool = False):
+        """
+        Scans vehicles for MOT expiry, Tax expiry, and Service Due (>7,000 miles).
+        Enforces a 12-hour cycle unless force=True.
+        Guarantees zero duplicate alerts using unique active index in DB.
+        """
+        def _parse_fleet_date(val):
+            if not val:
+                return None
+            if isinstance(val, (date, datetime)):
+                return val if isinstance(val, date) else val.date()
+            val_str = str(val).strip()
+            for fmt in ('%d/%m/%Y', '%Y-%m-%d', '%d-%m-%Y', '%Y/%m/%d'):
+                try:
+                    return datetime.strptime(val_str, fmt).date()
+                except ValueError:
+                    pass
+            return None
+
+        try:
+            with self.conn.cursor(cursor_factory=RealDictCursor) as cur:
+                # 1. Check last scan time from meta
+                cur.execute("SELECT value, updated_at FROM fleet_alert_meta WHERE key = 'last_scan_at'")
+                meta = cur.fetchone()
+                now_utc = datetime.now(timezone.utc)
+                
+                if not force and meta and meta.get('updated_at'):
+                    last_scan_at = meta['updated_at']
+                    if (now_utc - last_scan_at).total_seconds() < 12 * 3600:
+                        return {
+                            'scanned': False,
+                            'reason': 'Skipped (last scan was less than 12 hours ago)',
+                            'last_scan_at': last_scan_at.isoformat()
+                        }
+
+                # 2. Perform the scan
+                cars = self.get_all_cars()
+                today = datetime.now().date()
+                new_alerts_count = 0
+                
+                for c in cars:
+                    car_id = c.get('id')
+                    reg = (c.get('reg_no') or c.get('registration') or '').strip().upper()
+                    model = f"{c.get('name') or c.get('make') or ''} {c.get('model') or ''}".strip()
+                    if not car_id or not reg:
+                        continue
+
+                    active_types_detected = set()
+
+                    # MOT check
+                    mot_d = _parse_fleet_date(c.get('mot_date'))
+                    if mot_d:
+                        diff = (mot_d - today).days
+                        if diff <= 0:
+                            active_types_detected.add(('mot_expired', 'expired', f"MOT Expired ({reg})", f"MOT expired on {mot_d.strftime('%d/%m/%Y')}"))
+                        elif diff <= 7:
+                            active_types_detected.add(('mot_warning', 'warning', f"MOT Due Soon ({reg})", f"MOT due in {diff} day{'s' if diff != 1 else ''} ({mot_d.strftime('%d/%m/%Y')})"))
+
+                    # Road Tax check
+                    tax_d = _parse_fleet_date(c.get('road_tax'))
+                    if tax_d:
+                        diff = (tax_d - today).days
+                        if diff <= 0:
+                            active_types_detected.add(('tax_expired', 'expired', f"Road Tax Expired ({reg})", f"Road Tax expired on {tax_d.strftime('%d/%m/%Y')}"))
+                        elif diff <= 7:
+                            active_types_detected.add(('tax_warning', 'warning', f"Road Tax Due Soon ({reg})", f"Road Tax due in {diff} day{'s' if diff != 1 else ''} ({tax_d.strftime('%d/%m/%Y')})"))
+
+                    # Service check (> 7,000 miles)
+                    curr_miles = c.get('current_miles') or 0
+                    last_service_miles = c.get('last_service_miles') or 0
+                    diff_miles = curr_miles - last_service_miles
+                    if diff_miles > 7000:
+                        active_types_detected.add(('service_due', 'service', f"Service Due ({reg})", f"Overdue by {diff_miles - 7000:,} mi ({diff_miles:,} mi since last service)"))
+
+                    detected_type_names = {t[0] for t in active_types_detected}
+
+                    # Resolve any alerts for this car that are no longer active
+                    cur.execute("""
+                        SELECT id, alert_type FROM fleet_alerts 
+                        WHERE car_id = %s AND status = 'active'
+                    """, (car_id,))
+                    existing_active = cur.fetchall()
+                    for ea in existing_active:
+                        if ea['alert_type'] not in detected_type_names:
+                            cur.execute("""
+                                UPDATE fleet_alerts 
+                                SET status = 'resolved', resolved_at = CURRENT_TIMESTAMP
+                                WHERE id = %s
+                            """, (ea['id'],))
+
+                    # Insert or update active alerts (guaranteed NO duplicate rows via unique index)
+                    for alert_type, severity, title, msg in active_types_detected:
+                        cur.execute("""
+                            INSERT INTO fleet_alerts (car_id, registration, model, alert_type, severity, title, message, status)
+                            VALUES (%s, %s, %s, %s, %s, %s, %s, 'active')
+                            ON CONFLICT (car_id, alert_type) WHERE status = 'active'
+                            DO UPDATE SET 
+                                title = EXCLUDED.title,
+                                message = EXCLUDED.message
+                            RETURNING id, (xmax = 0) AS is_new
+                        """, (car_id, reg, model, alert_type, severity, title, msg))
+                        res = cur.fetchone()
+                        if res and res['is_new']:
+                            new_alerts_count += 1
+                            alert_id = res['id']
+                            # Map newly created alert to all users with is_read = false
+                            cur.execute("""
+                                INSERT INTO user_fleet_alerts (alert_id, user_id, is_read)
+                                SELECT %s, id, FALSE
+                                FROM users
+                                ON CONFLICT (alert_id, user_id) DO NOTHING
+                            """, (alert_id,))
+
+                # 3. Update last_scan_at timestamp
+                cur.execute("""
+                    INSERT INTO fleet_alert_meta (key, value, updated_at)
+                    VALUES ('last_scan_at', CURRENT_TIMESTAMP::text, CURRENT_TIMESTAMP)
+                    ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = EXCLUDED.updated_at
+                """)
+                self.conn.commit()
+                return {
+                    'scanned': True,
+                    'new_alerts': new_alerts_count,
+                    'last_scan_at': datetime.now(timezone.utc).isoformat()
+                }
+        except Exception as e:
+            self.conn.rollback()
+            raise e
+
+    def get_user_fleet_alerts(self, user_id: int):
+        """
+        Returns all active fleet alerts with user's specific read status.
+        """
+        try:
+            with self.conn.cursor(cursor_factory=RealDictCursor) as cur:
+                query = """
+                    SELECT 
+                        fa.id,
+                        fa.car_id,
+                        fa.registration,
+                        fa.model,
+                        fa.alert_type,
+                        fa.severity,
+                        fa.title,
+                        fa.message,
+                        fa.status,
+                        fa.created_at,
+                        COALESCE(ufa.is_read, FALSE) AS is_read,
+                        COALESCE(ufa.is_cleared, FALSE) AS is_cleared,
+                        ufa.read_at
+                    FROM fleet_alerts fa
+                    LEFT JOIN user_fleet_alerts ufa 
+                        ON ufa.alert_id = fa.id AND ufa.user_id = %s
+                    WHERE fa.status = 'active' AND COALESCE(ufa.is_cleared, FALSE) = FALSE
+                    ORDER BY 
+                        CASE WHEN COALESCE(ufa.is_read, FALSE) = FALSE THEN 0 ELSE 1 END,
+                        CASE 
+                            WHEN fa.severity = 'expired' THEN 0 
+                            WHEN fa.severity = 'warning' THEN 1 
+                            ELSE 2 
+                        END,
+                        fa.created_at DESC
+                """
+                cur.execute(query, (user_id,))
+                alerts = cur.fetchall()
+
+                # Get last scan time
+                cur.execute("SELECT updated_at FROM fleet_alert_meta WHERE key = 'last_scan_at'")
+                meta = cur.fetchone()
+                last_scan_at = meta['updated_at'].isoformat() if meta and meta.get('updated_at') else None
+
+                unread_count = sum(1 for a in alerts if not a['is_read'])
+
+                return {
+                    'alerts': alerts,
+                    'total_count': len(alerts),
+                    'unread_count': unread_count,
+                    'last_scan_at': last_scan_at
+                }
+        except Exception as e:
+            self.conn.rollback()
+            raise e
+
+    def mark_single_fleet_alert_as_read(self, alert_id: int, user_id: int) -> bool:
+        """
+        Marks an alert as read for a specific user only.
+        """
+        try:
+            with self.conn.cursor() as cur:
+                query = """
+                    INSERT INTO user_fleet_alerts (alert_id, user_id, is_read, read_at)
+                    VALUES (%s, %s, TRUE, CURRENT_TIMESTAMP)
+                    ON CONFLICT (alert_id, user_id) 
+                    DO UPDATE SET is_read = TRUE, read_at = CURRENT_TIMESTAMP
+                """
+                cur.execute(query, (alert_id, user_id))
+            self.conn.commit()
+            return True
+        except Exception as e:
+            self.conn.rollback()
+            raise e
+
+    def mark_all_fleet_alerts_as_read(self, user_id: int) -> bool:
+        """
+        Marks all active fleet alerts as read for a specific user only.
+        """
+        try:
+            with self.conn.cursor() as cur:
+                query = """
+                    INSERT INTO user_fleet_alerts (alert_id, user_id, is_read, read_at)
+                    SELECT fa.id, %s, TRUE, CURRENT_TIMESTAMP
+                    FROM fleet_alerts fa
+                    WHERE fa.status = 'active'
+                    ON CONFLICT (alert_id, user_id)
+                    DO UPDATE SET is_read = TRUE, read_at = CURRENT_TIMESTAMP
+                """
+                cur.execute(query, (user_id,))
+            self.conn.commit()
+            return True
         except Exception as e:
             self.conn.rollback()
             raise e
